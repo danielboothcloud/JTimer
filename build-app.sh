@@ -4,7 +4,7 @@ set -e  # Exit on any error
 
 APP_NAME="JTimer"
 BUNDLE_ID="com.yourcompany.JTimer"
-VERSION="1.0.0"
+VERSION=$(cat VERSION 2>/dev/null || echo "1.0.0")
 BUILD_DIR=".build"
 APP_DIR="${APP_NAME}.app"
 
