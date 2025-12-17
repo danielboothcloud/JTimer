@@ -12,6 +12,10 @@ A macOS menu bar application for tracking time on Jira issues with automatic wor
 - **Secure Storage**: API tokens stored securely in macOS Keychain
 - **Syncs with Tempo**: Syncs with Jira integrated time tracking tools like Tempo
 
+## Screenshots
+
+![JTimer Menu Bar Interface](.github/screenshots/main.png)
+
 ## Installation
 
 ### From Release
