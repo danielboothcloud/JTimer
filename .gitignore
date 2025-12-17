@@ -1,0 +1,24 @@
+# Swift build artifacts
+.build
+*.swiftmodule
+*.swiftdoc
+*.dSYM
+
+# App bundle and distribution
+JTimer.app/
+*.app
+*.dmg
+*.zip
+
+# Cache
+.cache/
+
+# macOS
+.DS_Store
+xcuserdata/
+*.xcworkspace
+*.xcodeproj
+
+# IDE
+.vscode/
+.idea/
