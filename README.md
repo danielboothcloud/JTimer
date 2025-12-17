@@ -14,7 +14,7 @@ A macOS menu bar application for tracking time on Jira issues with automatic wor
 
 ## Screenshots
 
-<img src=".github/screenshots/main.png" alt="JTimer Menu Bar Interface" width="500"/>
+<img src=".github/screenshots/main.png" alt="JTimer Menu Bar Interface" width="350"/>
 
 ## Installation
 

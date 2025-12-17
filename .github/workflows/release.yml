@@ -64,17 +64,31 @@ jobs:
           retention-days: 90
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ZIP_FILE="JTimer-${VERSION}.zip"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
 
-          gh release create "v${VERSION}" \
+          # Determine release tag
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            RELEASE_TAG="v${VERSION}"
+            RELEASE_TITLE="JTimer v${VERSION}"
+          else
+            RELEASE_TAG="v${VERSION}"
+            RELEASE_TITLE="JTimer v${VERSION}"
+          fi
+
+          # Delete existing release with this tag if it exists
+          gh release delete "${RELEASE_TAG}" --yes 2>/dev/null || true
+
+          gh release create "${RELEASE_TAG}" \
             "${ZIP_FILE}" \
-            --title "JTimer v${VERSION}" \
+            --title "${RELEASE_TITLE}" \
             --notes "## JTimer v${VERSION}
+
+          **Build:** ${COMMIT_SHA}
 
           ### Installation
 
@@ -102,39 +116,5 @@ jobs:
 
           *Note: This app is ad-hoc signed. The xattr command removes macOS quarantine attributes from downloaded files.*" \
             --draft=false \
-            --prerelease=false
-
-      - name: Create draft release for main branch
-        if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ZIP_FILE="JTimer-${VERSION}.zip"
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-
-          # Delete existing draft release if it exists
-          gh release delete "latest-main" --yes 2>/dev/null || true
-
-          gh release create "latest-main" \
-            "${ZIP_FILE}" \
-            --title "JTimer (Latest from main)" \
-            --notes "## JTimer Development Build
-
-          **⚠️ This is a development build from the main branch**
-
-          **Commit:** ${COMMIT_SHA}
-          **Version:** ${VERSION}
-
-          ### Installation
-
-          1. Download the ZIP file below and extract it
-          2. If you see a security warning, open Terminal and run:
-             \`\`\`bash
-             xattr -cr ~/Downloads/JTimer.app
-             \`\`\`
-          3. Move JTimer.app to Applications folder
-          4. Launch JTimer from Applications or Spotlight" \
-            --draft=true \
-            --prerelease=true \
-            --latest=false
+            --prerelease=false \
+            --latest=true
