@@ -36,9 +36,9 @@ echo "3️⃣ Copying executable..."
 cp "${BUILD_DIR}/release/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 
-# Step 4: Create Info.plist
+# Step 4: Create Info.plist with version injection
 echo "4️⃣ Creating Info.plist..."
-cp Info.plist.template "${APP_DIR}/Contents/Info.plist"
+sed "s/{{VERSION}}/${VERSION}/g" Info.plist.template > "${APP_DIR}/Contents/Info.plist"
 
 # Step 5: Copy app icon and resources if they exist
 echo "5️⃣ Adding app icon and resources..."
