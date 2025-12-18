@@ -208,7 +208,7 @@ class JiraAPI: ObservableObject {
         }
     }
 
-    func logWork(issueKey: String, timeSpentSeconds: Int, startTime: Date) async throws {
+    func logWork(issueKey: String, timeSpentSeconds: Int, startTime: Date, comment: String? = nil) async throws {
         guard let authHeader = authHeader else {
             throw JiraAPIError.notAuthenticated
         }
@@ -230,6 +230,7 @@ class JiraAPI: ObservableObject {
         let jiraTimestamp = timestampWithoutTZ + "+0000"
 
         // Create ADF-formatted comment for Jira API v3
+        let commentText = comment?.isEmpty == false ? comment! : "Time tracked via JTimer"
         let commentADF = CommentADF(
             type: "doc",
             version: 1,
@@ -239,7 +240,7 @@ class JiraAPI: ObservableObject {
                     content: [
                         ADFText(
                             type: "text",
-                            text: "Time tracked via JTimer"
+                            text: commentText
                         )
                     ]
                 )
