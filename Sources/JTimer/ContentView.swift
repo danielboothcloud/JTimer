@@ -8,6 +8,18 @@ struct TimerResult: Identifiable {
     let duration: TimeInterval
 }
 
+struct VisualEffectView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
 struct ContentView: View {
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var jiraAPI: JiraAPI
@@ -794,6 +806,7 @@ struct LogConfirmationView: View {
             .padding()
         }
         .frame(width: 400, height: 450)
+        .background(VisualEffectView())
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

@@ -1,18 +1,6 @@
 import SwiftUI
 import AppKit
 
-struct VisualEffectView: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
 struct SettingsView: View {
     @EnvironmentObject var jiraAPI: JiraAPI
     @Environment(\.dismiss) private var dismiss
