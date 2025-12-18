@@ -787,24 +787,30 @@ struct LogConfirmationView: View {
 
                     // Description field
                     VStack(spacing: 8) {
-                        Text("Work Description")
+                        Text("Work Description (optional)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                        TextEditor(text: $workDescription)
-                            .font(.caption)
-                            .frame(height: 60)
-                            .padding(4)
-                            .background(Color.secondary.opacity(0.05))
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
+                        ZStack(alignment: .topLeading) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(NSColor.textBackgroundColor))
+
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+
+                            TextEditor(text: $workDescription)
+                                .font(.caption)
+                                .scrollContentBackground(.hidden)
+                                .background(Color.clear)
+                                .padding(4)
+                        }
+                        .frame(height: 60)
                     }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.top)
+                .padding(.bottom, 8)
             }
 
             Divider()
@@ -827,7 +833,7 @@ struct LogConfirmationView: View {
             }
             .padding()
         }
-        .frame(width: 400, height: 550)
+        .frame(width: 400, height: 480)
         .background(VisualEffectView())
     }
 
