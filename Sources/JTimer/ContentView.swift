@@ -8,6 +8,18 @@ struct TimerResult: Identifiable {
     let duration: TimeInterval
 }
 
+struct VisualEffectView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
 struct ContentView: View {
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var jiraAPI: JiraAPI
@@ -42,12 +54,13 @@ struct ContentView: View {
             LogConfirmationView(
                 timerResult: result,
                 jiraDomain: AppSettings().jiraDomain,
-                onConfirm: { adjustedDuration in
+                onConfirm: { adjustedDuration, description in
                     Task {
                         await logWorkToJira(
                             issue: result.issue,
                             startTime: result.startTime,
-                            duration: adjustedDuration
+                            duration: adjustedDuration,
+                            comment: description
                         )
                     }
                     pendingTimerResult = nil
@@ -461,7 +474,7 @@ struct ContentView: View {
         }
     }
 
-    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval) async {
+    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval, comment: String? = nil) async {
         do {
             let timeInSeconds = Int(duration)
             print("⏱️ JTimer: Logging \(timeInSeconds) seconds (\(timeInSeconds/60) minutes) to \(issue.key)")
@@ -469,7 +482,8 @@ struct ContentView: View {
             try await jiraAPI.logWork(
                 issueKey: issue.key,
                 timeSpentSeconds: timeInSeconds,
-                startTime: startTime
+                startTime: startTime,
+                comment: comment
             )
 
             print("✅ JTimer: Work logged successfully")
@@ -576,16 +590,17 @@ struct IssueRowView: View {
 struct LogConfirmationView: View {
     let timerResult: TimerResult
     let jiraDomain: String
-    let onConfirm: (TimeInterval) -> Void
+    let onConfirm: (TimeInterval, String) -> Void
     let onCancel: () -> Void
 
     @State private var hours: Int
     @State private var minutes: Int
     @State private var seconds: Int
+    @State private var workDescription: String = ""
 
     init(timerResult: TimerResult,
          jiraDomain: String,
-         onConfirm: @escaping (TimeInterval) -> Void,
+         onConfirm: @escaping (TimeInterval, String) -> Void,
          onCancel: @escaping () -> Void) {
         self.timerResult = timerResult
         self.jiraDomain = jiraDomain
@@ -769,8 +784,33 @@ struct LogConfirmationView: View {
                         .background(Color.blue.opacity(0.05))
                         .cornerRadius(6)
                     }
+
+                    // Description field
+                    VStack(spacing: 8) {
+                        Text("Work Description (optional)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        ZStack(alignment: .topLeading) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(NSColor.textBackgroundColor))
+
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+
+                            TextEditor(text: $workDescription)
+                                .font(.caption)
+                                .scrollContentBackground(.hidden)
+                                .background(Color.clear)
+                                .padding(4)
+                        }
+                        .frame(height: 60)
+                    }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.top)
+                .padding(.bottom, 8)
             }
 
             Divider()
@@ -786,14 +826,15 @@ struct LogConfirmationView: View {
                 Spacer()
 
                 Button("Log Time") {
-                    onConfirm(adjustedDuration)
+                    onConfirm(adjustedDuration, workDescription)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }
             .padding()
         }
-        .frame(width: 400, height: 450)
+        .frame(width: 400, height: 480)
+        .background(VisualEffectView())
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
