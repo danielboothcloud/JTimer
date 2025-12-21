@@ -29,11 +29,14 @@ struct ContentView: View {
     @State private var customJQL = ""
     @State private var isLoadingIssues = false
     @State private var showingSettings = false
+    @State private var showingHistory = false
     @State private var selectedIssue: JiraIssue?
     @State private var lastError: String?
     @State private var currentQuery = ""
     @State private var lastResultCount = 0
     @State private var pendingTimerResult: TimerResult?
+    @State private var pendingDescription: String = ""
+    @State private var timeLogHistory: [TimeLogEntry] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,11 +52,13 @@ struct ContentView: View {
         .frame(width: 400, height: 500)
         .onAppear {
             loadIssuesIfNeeded()
+            loadLogHistory()
         }
         .sheet(item: $pendingTimerResult) { result in
             LogConfirmationView(
                 timerResult: result,
                 jiraDomain: AppSettings().jiraDomain,
+                initialDescription: pendingDescription,
                 onConfirm: { adjustedDuration, description in
                     Task {
                         await logWorkToJira(
@@ -64,9 +69,11 @@ struct ContentView: View {
                         )
                     }
                     pendingTimerResult = nil
+                    pendingDescription = ""
                 },
                 onCancel: {
                     pendingTimerResult = nil
+                    pendingDescription = ""
                 }
             )
         }
@@ -91,15 +98,39 @@ struct ContentView: View {
                 }
             }
 
+            Button(action: { showingHistory = true }) {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            .buttonStyle(.borderless)
+            .help("View time log history")
+
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gear")
             }
             .buttonStyle(.borderless)
+            .help("Settings")
         }
         .padding()
         .sheet(isPresented: $showingSettings) {
             SettingsView()
                 .environmentObject(jiraAPI)
+        }
+        .sheet(isPresented: $showingHistory) {
+            LogHistoryView(
+                logs: $timeLogHistory,
+                onEditLog: { log in
+                    showingHistory = false
+                    pendingDescription = log.description
+                    // Create a timer result from the log entry
+                    if let issue = issues.first(where: { $0.key == log.issueKey }) {
+                        pendingTimerResult = TimerResult(
+                            issue: issue,
+                            startTime: log.startTime,
+                            duration: log.duration
+                        )
+                    }
+                }
+            )
         }
     }
 
@@ -487,8 +518,34 @@ struct ContentView: View {
             )
 
             print("✅ JTimer: Work logged successfully")
+
+            // Save to history
+            await MainActor.run {
+                let logEntry = TimeLogEntry(
+                    issueKey: issue.key,
+                    issueSummary: issue.summary,
+                    duration: duration,
+                    startTime: startTime,
+                    description: comment ?? ""
+                )
+                timeLogHistory.insert(logEntry, at: 0)
+                saveLogHistory()
+            }
         } catch {
             print("Failed to log work: \(error)")
+        }
+    }
+
+    private func saveLogHistory() {
+        if let encoded = try? JSONEncoder().encode(timeLogHistory) {
+            UserDefaults.standard.set(encoded, forKey: "timeLogHistory")
+        }
+    }
+
+    private func loadLogHistory() {
+        if let data = UserDefaults.standard.data(forKey: "timeLogHistory"),
+           let decoded = try? JSONDecoder().decode([TimeLogEntry].self, from: data) {
+            timeLogHistory = decoded
         }
     }
 }
@@ -600,6 +657,7 @@ struct LogConfirmationView: View {
 
     init(timerResult: TimerResult,
          jiraDomain: String,
+         initialDescription: String = "",
          onConfirm: @escaping (TimeInterval, String) -> Void,
          onCancel: @escaping () -> Void) {
         self.timerResult = timerResult
@@ -611,6 +669,7 @@ struct LogConfirmationView: View {
         _hours = State(initialValue: totalSeconds / 3600)
         _minutes = State(initialValue: (totalSeconds % 3600) / 60)
         _seconds = State(initialValue: totalSeconds % 60)
+        _workDescription = State(initialValue: initialDescription)
     }
 
     private var issueURL: URL? {
@@ -843,5 +902,127 @@ struct LogConfirmationView: View {
         let m = (totalSeconds % 3600) / 60
         let s = totalSeconds % 60
         return String(format: "%02d:%02d:%02d", h, m, s)
+    }
+}
+
+struct LogHistoryView: View {
+    @Binding var logs: [TimeLogEntry]
+    let onEditLog: (TimeLogEntry) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Time Log History")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+
+            Divider()
+
+            if logs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No time logs yet")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text("Your logged time entries will appear here")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(logs) { log in
+                            LogHistoryRowView(log: log, onEdit: {
+                                onEditLog(log)
+                            })
+                        }
+                    }
+                    .padding()
+                }
+            }
+        }
+        .frame(width: 500, height: 400)
+        .background(VisualEffectView())
+    }
+}
+
+struct LogHistoryRowView: View {
+    let log: TimeLogEntry
+    let onEdit: () -> Void
+
+    private var dateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = Int(duration)
+        let h = totalSeconds / 3600
+        let m = (totalSeconds % 3600) / 60
+        let s = totalSeconds % 60
+        return String(format: "%02d:%02d:%02d", h, m, s)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(log.issueKey)
+                    .font(.caption.bold())
+                    .foregroundColor(.blue)
+
+                Spacer()
+
+                Text(formatDuration(log.duration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.primary)
+            }
+
+            Text(log.issueSummary)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            if !log.description.isEmpty {
+                Text(log.description)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .padding(.top, 2)
+            }
+
+            HStack {
+                Text(dateFormatter.string(from: log.loggedAt))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("Edit") {
+                    onEdit()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.05))
+        .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
     }
 }

@@ -65,6 +65,26 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     }
 }
 
+struct TimeLogEntry: Codable, Identifiable {
+    let id: UUID
+    let issueKey: String
+    let issueSummary: String
+    let duration: TimeInterval
+    let startTime: Date
+    let loggedAt: Date
+    var description: String
+    
+    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String) {
+        self.id = UUID()
+        self.issueKey = issueKey
+        self.issueSummary = issueSummary
+        self.duration = duration
+        self.startTime = startTime
+        self.loggedAt = Date()
+        self.description = description
+    }
+}
+
 struct JiraSearchResponse: Codable {
     let issues: [JiraIssue]
     let total: Int?
