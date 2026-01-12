@@ -161,7 +161,7 @@ class JiraAPI: ObservableObject {
 
         // Use the new /search/jql endpoint for API v3, old /search for v2
         let endpoint = apiVersion >= 3 ? "/search/jql" : "/search"
-        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project&maxResults=50"
+        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created&maxResults=50"
 
         print("🔍 JTimer: Search URL (API v\(apiVersion)): \(urlString)")
 
@@ -277,6 +277,11 @@ class JiraAPI: ObservableObject {
         guard httpResponse.statusCode == 201 else {
             throw JiraAPIError.serverError(httpResponse.statusCode)
         }
+    }
+
+    func fetchUpdates(days: Int = 3) async throws -> [JiraIssue] {
+        let jql = "(assignee = currentUser() OR text ~ currentUser()) AND updated >= -3d ORDER BY updated DESC"
+        return try await searchIssues(jql: jql)
     }
 
     func fetchRecentWorklogs(limit: Int = 50) async throws -> [TimeLogEntry] {

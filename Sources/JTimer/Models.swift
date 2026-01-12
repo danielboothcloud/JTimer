@@ -8,6 +8,8 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let assignee: String?
     let issueType: String
     let project: String
+    let updated: Date?
+    let created: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, key
@@ -15,7 +17,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     }
 
     enum FieldKeys: String, CodingKey {
-        case summary, status, assignee, issuetype, project
+        case summary, status, assignee, issuetype, project, updated, created
     }
 
     enum StatusKeys: String, CodingKey {
@@ -56,6 +58,22 @@ struct JiraIssue: Codable, Identifiable, Hashable {
 
         let projectContainer = try fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
         project = try projectContainer.decode(String.self, forKey: .name)
+        
+        // Parse dates
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        
+        if let updatedString = try? fields.decode(String.self, forKey: .updated) {
+            updated = dateFormatter.date(from: updatedString)
+        } else {
+            updated = nil
+        }
+        
+        if let createdString = try? fields.decode(String.self, forKey: .created) {
+            created = dateFormatter.date(from: createdString)
+        } else {
+            created = nil
+        }
     }
 
     func encode(to encoder: Encoder) throws {

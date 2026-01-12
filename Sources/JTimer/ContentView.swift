@@ -37,6 +37,8 @@ struct ContentView: View {
     @State private var pendingTimerResult: TimerResult?
     @State private var pendingDescription: String = ""
     @State private var timeLogHistory: [TimeLogEntry] = []
+    @State private var showingUpdates = false
+    @State private var recentUpdates: [JiraIssue] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +80,11 @@ struct ContentView: View {
                 }
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("PopoverWillClose"))) { _ in
+            showingUpdates = false
+            showingHistory = false
+            showingSettings = false
+        }
     }
 
     private var headerView: some View {
@@ -98,6 +105,12 @@ struct ContentView: View {
                         .foregroundColor(.primary)
                 }
             }
+
+            Button(action: { showingUpdates = true }) {
+                Image(systemName: "bell")
+            }
+            .buttonStyle(.borderless)
+            .help("View recent updates")
 
             Button(action: { showingHistory = true }) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -130,6 +143,19 @@ struct ContentView: View {
                             duration: log.duration
                         )
                     }
+                }
+            )
+        }
+        .sheet(isPresented: $showingUpdates) {
+            UpdatesView(
+                issues: $recentUpdates,
+                onSelect: { issue in
+                    showingUpdates = false
+                    // Add to issues list if not present so we can select it
+                    if !issues.contains(where: { $0.key == issue.key }) {
+                        issues.insert(issue, at: 0)
+                    }
+                    selectedIssue = issue
                 }
             )
         }
@@ -406,10 +432,26 @@ struct ContentView: View {
     }
 
     private func loadIssuesIfNeeded() {
-        if jiraAPI.isAuthenticated && issues.isEmpty {
-            Task {
-                await loadIssues()
+        if jiraAPI.isAuthenticated {
+            if issues.isEmpty {
+                Task {
+                    await loadIssues()
+                }
             }
+            Task {
+                await loadRecentUpdates()
+            }
+        }
+    }
+    
+    private func loadRecentUpdates() async {
+        do {
+            let updates = try await jiraAPI.fetchUpdates()
+            await MainActor.run {
+                recentUpdates = updates
+            }
+        } catch {
+            print("Failed to load updates: \(error)")
         }
     }
 

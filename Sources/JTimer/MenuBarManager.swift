@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 
-class MenuBarManager: ObservableObject {
+class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var timerManager: TimerManager?
@@ -34,11 +34,16 @@ class MenuBarManager: ObservableObject {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 400, height: 500)
         popover?.behavior = .semitransient
+        popover?.delegate = self
         popover?.contentViewController = NSHostingController(
             rootView: ContentView()
                 .environmentObject(timerManager)
                 .environmentObject(jiraAPI)
         )
+    }
+
+    func popoverWillClose(_ notification: Notification) {
+        NotificationCenter.default.post(name: Notification.Name("PopoverWillClose"), object: nil)
     }
 
     private func observeTimerChanges() {
