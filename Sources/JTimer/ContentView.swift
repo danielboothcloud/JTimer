@@ -149,6 +149,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingUpdates) {
             UpdatesView(
                 issues: $recentUpdates,
+                currentUser: jiraAPI.currentUser,
                 onSelect: { issue in
                     showingUpdates = false
                     // Add to issues list if not present so we can select it

@@ -161,7 +161,7 @@ class JiraAPI: ObservableObject {
 
         // Use the new /search/jql endpoint for API v3, old /search for v2
         let endpoint = apiVersion >= 3 ? "/search/jql" : "/search"
-        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created&maxResults=50"
+        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created,comment&maxResults=50"
 
         print("🔍 JTimer: Search URL (API v\(apiVersion)): \(urlString)")
 

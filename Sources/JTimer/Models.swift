@@ -10,6 +10,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let project: String
     let updated: Date?
     let created: Date?
+    let comments: [JiraComment]
 
     enum CodingKeys: String, CodingKey {
         case id, key
@@ -17,7 +18,11 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     }
 
     enum FieldKeys: String, CodingKey {
-        case summary, status, assignee, issuetype, project, updated, created
+        case summary, status, assignee, issuetype, project, updated, created, comment
+    }
+    
+    enum CommentKeys: String, CodingKey {
+        case comments
     }
 
     enum StatusKeys: String, CodingKey {
@@ -74,6 +79,13 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         } else {
             created = nil
         }
+        
+        // Parse comments
+        if let commentContainer = try? fields.nestedContainer(keyedBy: CommentKeys.self, forKey: .comment) {
+            comments = try commentContainer.decode([JiraComment].self, forKey: .comments)
+        } else {
+            comments = []
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -81,6 +93,19 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         try container.encode(id, forKey: .id)
         try container.encode(key, forKey: .key)
     }
+}
+
+struct JiraUser: Codable, Hashable {
+    let accountId: String
+    let displayName: String
+    let emailAddress: String?
+}
+
+struct JiraComment: Codable, Hashable {
+    let id: String
+    let author: JiraUser
+    let created: String
+    // We don't parse body for now to avoid complexity with ADF
 }
 
 struct TimeLogEntry: Codable, Identifiable {
@@ -113,12 +138,10 @@ struct JiraSearchResponse: Codable {
         issues = try container.decode([JiraIssue].self, forKey: .issues)
         total = try container.decodeIfPresent(Int.self, forKey: .total)
     }
-}
-
-struct JiraUser: Codable {
-    let accountId: String
-    let displayName: String
-    let emailAddress: String
+    
+    enum CodingKeys: String, CodingKey {
+        case issues, total
+    }
 }
 
 struct WorkLogEntry: Codable {

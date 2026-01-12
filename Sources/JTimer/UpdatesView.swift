@@ -2,6 +2,7 @@ import SwiftUI
 
 struct UpdatesView: View {
     @Binding var issues: [JiraIssue]
+    let currentUser: JiraUser?
     let onSelect: (JiraIssue) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -40,7 +41,7 @@ struct UpdatesView: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(issues) { issue in
-                            UpdateRowView(issue: issue) {
+                            UpdateRowView(issue: issue, currentUser: currentUser) {
                                 onSelect(issue)
                                 dismiss()
                             }
@@ -57,6 +58,7 @@ struct UpdatesView: View {
 
 struct UpdateRowView: View {
     let issue: JiraIssue
+    let currentUser: JiraUser?
     let onSelect: () -> Void
 
     private var dateFormatter: DateFormatter {
@@ -64,6 +66,46 @@ struct UpdateRowView: View {
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter
+    }
+    
+    private var issueURL: URL? {
+        let settings = AppSettings()
+        let domain = settings.jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL: String
+
+        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
+            baseURL = "https://\(domain)"
+        } else if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
+            baseURL = domain
+        } else {
+            baseURL = "https://\(domain).atlassian.net"
+        }
+
+        return URL(string: "\(baseURL)/browse/\(issue.key)")
+    }
+    
+    private var contextInfo: (text: String, icon: String, color: Color) {
+        // Check for new comments first (most likely 'update')
+        if let lastComment = issue.comments.last, issue.updated != nil {
+            // Parse comment date
+            let commentDateFormatter = ISO8601DateFormatter()
+            commentDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            // Simplify: just check if author is different from current user
+            if let user = currentUser, lastComment.author.accountId != user.accountId {
+                return ("Comment by \(lastComment.author.displayName)", "bubble.left.fill", .orange)
+            }
+        }
+        
+        // Check if recently assigned
+        if let assignee = issue.assignee, let user = currentUser, assignee == user.displayName {
+             // If created recently and assigned to me
+             if let created = issue.created, Date().timeIntervalSince(created) < 86400 * 3 {
+                 return ("Assigned to you", "person.fill.checkmark", .green)
+             }
+        }
+        
+        // Default
+        return ("Updated", "pencil", .secondary)
     }
 
     var body: some View {
@@ -73,6 +115,18 @@ struct UpdateRowView: View {
                     Text(issue.key)
                         .font(.caption.bold())
                         .foregroundColor(.blue)
+
+                    Button(action: {
+                        if let url = issueURL {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(issue.key) in browser")
 
                     Spacer()
 
@@ -88,6 +142,19 @@ struct UpdateRowView: View {
                     .foregroundColor(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                
+                // Context Row
+                HStack(spacing: 4) {
+                    Image(systemName: contextInfo.icon)
+                        .font(.caption2)
+                        .foregroundColor(contextInfo.color)
+                    Text(contextInfo.text)
+                        .font(.caption2)
+                        .foregroundColor(contextInfo.color)
+                    
+                    Spacer()
+                }
+                .padding(.vertical, 2)
 
                 HStack {
                     Text(issue.status)
