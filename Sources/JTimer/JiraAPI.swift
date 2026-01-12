@@ -278,8 +278,170 @@ class JiraAPI: ObservableObject {
             throw JiraAPIError.serverError(httpResponse.statusCode)
         }
     }
+
+    func fetchRecentWorklogs(limit: Int = 50) async throws -> [TimeLogEntry] {
+        guard let authHeader = authHeader else {
+            throw JiraAPIError.notAuthenticated
+        }
+
+        guard let currentUserEmail = currentUser?.emailAddress else {
+            throw JiraAPIError.notAuthenticated
+        }
+
+        // Search for issues updated in the last 30 days
+        let jql = "worklogAuthor = currentUser() AND updated >= -30d ORDER BY updated DESC"
+        let issues = try await searchIssues(jql: jql)
+
+        var allWorklogs: [TimeLogEntry] = []
+
+        // Fetch worklogs for each issue
+        for issue in issues.prefix(20) { // Limit to 20 most recent issues
+            let url = URL(string: "\(baseURL)/issue/\(issue.key)/worklog")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            let (data, response) = try await urlSession.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                continue
+            }
+
+            if httpResponse.statusCode == 200 {
+                let worklogResponse = try JSONDecoder().decode(WorklogResponse.self, from: data)
+
+                // Filter worklogs by current user and convert to TimeLogEntry
+                for worklog in worklogResponse.worklogs {
+                    if worklog.author.emailAddress == currentUserEmail {
+                        // Parse the started timestamp
+                        let dateFormatter = ISO8601DateFormatter()
+                        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+                        guard let startTime = dateFormatter.date(from: worklog.started) else {
+                            continue
+                        }
+
+                        // Parse created timestamp if available
+                        var loggedAt = Date()
+                        if let created = worklog.created, let createdDate = dateFormatter.date(from: created) {
+                            loggedAt = createdDate
+                        }
+
+                        // Extract description from comment ADF
+                        var description = ""
+                        if let content = worklog.comment?.content {
+                            for item in content {
+                                if let textContent = item.content {
+                                    for text in textContent {
+                                        description += text.text
+                                    }
+                                }
+                            }
+                        }
+
+                        let entry = TimeLogEntry(
+                            issueKey: issue.key,
+                            issueSummary: issue.summary,
+                            duration: TimeInterval(worklog.timeSpentSeconds),
+                            startTime: startTime,
+                            description: description,
+                            loggedAt: loggedAt
+                        )
+                        allWorklogs.append(entry)
+                    }
+                }
+            }
+        }
+
+        // Sort by logged date (most recent first)
+        return allWorklogs.sorted { $0.loggedAt > $1.loggedAt }
+    }
+
+    func postComment(issueKey: String, comment: String) async throws {
+        guard let authHeader = authHeader else {
+            throw JiraAPIError.notAuthenticated
+        }
+
+        let url = URL(string: "\(baseURL)/issue/\(issueKey)/comment")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let commentADF = CommentADF(
+            type: "doc",
+            version: 1,
+            content: [
+                ADFContent(
+                    type: "paragraph",
+                    content: [
+                        ADFText(
+                            type: "text",
+                            text: comment
+                        )
+                    ]
+                )
+            ]
+        )
+
+        struct CommentRequest: Codable {
+            let body: CommentADF
+        }
+
+        let requestBody = CommentRequest(body: commentADF)
+        let encoder = JSONEncoder()
+        request.httpBody = try encoder.encode(requestBody)
+
+        print("📤 JTimer: POST \(url)")
+        if let jsonString = String(data: request.httpBody!, encoding: .utf8) {
+            print("📤 JTimer: Request body: \(jsonString)")
+        }
+
+        let (data, response) = try await urlSession.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw JiraAPIError.invalidResponse
+        }
+
+        print("📥 JTimer: Comment response status: \(httpResponse.statusCode)")
+
+        if httpResponse.statusCode == 201 {
+            print("✅ JTimer: Comment added successfully")
+        } else {
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📥 JTimer: Response body: \(responseString)")
+            }
+            throw JiraAPIError.serverError(httpResponse.statusCode)
+        }
+    }
 }
 
+struct WorklogResponse: Codable {
+    let worklogs: [Worklog]
+}
+
+struct Worklog: Codable {
+    let id: String
+    let issueId: String?
+    let author: WorklogAuthor
+    let comment: WorklogComment?
+    let started: String
+    let created: String?
+    let timeSpentSeconds: Int
+
+    struct WorklogAuthor: Codable {
+        let accountId: String?
+        let emailAddress: String?
+        let displayName: String?
+    }
+
+    struct WorklogComment: Codable {
+        let type: String?
+        let version: Int?
+        let content: [ADFContent]?
+    }
+}
 enum JiraAPIError: LocalizedError {
     case notAuthenticated
     case invalidURL

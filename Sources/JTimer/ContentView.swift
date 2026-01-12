@@ -59,13 +59,14 @@ struct ContentView: View {
                 timerResult: result,
                 jiraDomain: AppSettings().jiraDomain,
                 initialDescription: pendingDescription,
-                onConfirm: { adjustedDuration, description in
+                onConfirm: { adjustedDuration, description, alsoAddAsComment in
                     Task {
                         await logWorkToJira(
                             issue: result.issue,
                             startTime: result.startTime,
                             duration: adjustedDuration,
-                            comment: description
+                            comment: description,
+                            alsoAddAsComment: alsoAddAsComment
                         )
                     }
                     pendingTimerResult = nil
@@ -505,7 +506,7 @@ struct ContentView: View {
         }
     }
 
-    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval, comment: String? = nil) async {
+    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval, comment: String? = nil, alsoAddAsComment: Bool = false) async {
         do {
             let timeInSeconds = Int(duration)
             print("⏱️ JTimer: Logging \(timeInSeconds) seconds (\(timeInSeconds/60) minutes) to \(issue.key)")
@@ -519,33 +520,36 @@ struct ContentView: View {
 
             print("✅ JTimer: Work logged successfully")
 
-            // Save to history
-            await MainActor.run {
-                let logEntry = TimeLogEntry(
+            // Also add as comment if checkbox is checked and there's a comment
+            if alsoAddAsComment, let commentText = comment, !commentText.isEmpty {
+                print("💬 JTimer: Adding comment to \(issue.key)...")
+                try await jiraAPI.postComment(
                     issueKey: issue.key,
-                    issueSummary: issue.summary,
-                    duration: duration,
-                    startTime: startTime,
-                    description: comment ?? ""
+                    comment: commentText
                 )
-                timeLogHistory.insert(logEntry, at: 0)
-                saveLogHistory()
             }
+
+            // Refresh history from Jira
+            loadLogHistory()
         } catch {
             print("Failed to log work: \(error)")
         }
     }
 
     private func saveLogHistory() {
-        if let encoded = try? JSONEncoder().encode(timeLogHistory) {
-            UserDefaults.standard.set(encoded, forKey: "timeLogHistory")
-        }
+        // No longer needed - we fetch from Jira
     }
 
     private func loadLogHistory() {
-        if let data = UserDefaults.standard.data(forKey: "timeLogHistory"),
-           let decoded = try? JSONDecoder().decode([TimeLogEntry].self, from: data) {
-            timeLogHistory = decoded
+        Task {
+            do {
+                let worklogs = try await jiraAPI.fetchRecentWorklogs()
+                await MainActor.run {
+                    timeLogHistory = worklogs
+                }
+            } catch {
+                print("Failed to load worklogs: \(error)")
+            }
         }
     }
 }
@@ -647,18 +651,19 @@ struct IssueRowView: View {
 struct LogConfirmationView: View {
     let timerResult: TimerResult
     let jiraDomain: String
-    let onConfirm: (TimeInterval, String) -> Void
+    let onConfirm: (TimeInterval, String, Bool) -> Void
     let onCancel: () -> Void
 
     @State private var hours: Int
     @State private var minutes: Int
     @State private var seconds: Int
     @State private var workDescription: String = ""
+    @State private var alsoAddAsComment: Bool = false
 
     init(timerResult: TimerResult,
          jiraDomain: String,
          initialDescription: String = "",
-         onConfirm: @escaping (TimeInterval, String) -> Void,
+         onConfirm: @escaping (TimeInterval, String, Bool) -> Void,
          onCancel: @escaping () -> Void) {
         self.timerResult = timerResult
         self.jiraDomain = jiraDomain
@@ -865,6 +870,11 @@ struct LogConfirmationView: View {
                                 .padding(4)
                         }
                         .frame(height: 60)
+
+                        Toggle("Also add as comment on ticket", isOn: $alsoAddAsComment)
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
+                            .padding(.top, 4)
                     }
                 }
                 .padding(.horizontal)
@@ -885,7 +895,7 @@ struct LogConfirmationView: View {
                 Spacer()
 
                 Button("Log Time") {
-                    onConfirm(adjustedDuration, workDescription)
+                    onConfirm(adjustedDuration, workDescription, alsoAddAsComment)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

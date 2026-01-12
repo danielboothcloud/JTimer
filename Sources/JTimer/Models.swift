@@ -74,13 +74,13 @@ struct TimeLogEntry: Codable, Identifiable {
     let loggedAt: Date
     var description: String
     
-    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String) {
+    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date) {
         self.id = UUID()
         self.issueKey = issueKey
         self.issueSummary = issueSummary
         self.duration = duration
         self.startTime = startTime
-        self.loggedAt = Date()
+        self.loggedAt = loggedAt
         self.description = description
     }
 }
@@ -184,7 +184,7 @@ struct JQLTemplate {
         ),
         JQLTemplate(
             name: "My In Progress",
-            query: "assignee = currentUser() AND status = \"In Progress\"",
+            query: "assignee = currentUser() AND status = \"In Progress\" OR status = \"Work in Progress\"",
             description: "Issues you're currently working on"
         ),
         JQLTemplate(
