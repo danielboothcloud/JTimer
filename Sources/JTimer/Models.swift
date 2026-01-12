@@ -11,9 +11,10 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let updated: Date?
     let created: Date?
     let comments: [JiraComment]
+    let changelog: JiraChangelog?
 
     enum CodingKeys: String, CodingKey {
-        case id, key
+        case id, key, changelog
         case fields
     }
 
@@ -45,6 +46,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         key = try container.decode(String.self, forKey: .key)
+        changelog = try container.decodeIfPresent(JiraChangelog.self, forKey: .changelog)
 
         let fields = try container.nestedContainer(keyedBy: FieldKeys.self, forKey: .fields)
         summary = try fields.decode(String.self, forKey: .summary)
@@ -106,6 +108,23 @@ struct JiraComment: Codable, Hashable {
     let author: JiraUser
     let created: String
     // We don't parse body for now to avoid complexity with ADF
+}
+
+struct JiraChangelog: Codable, Hashable {
+    let histories: [JiraHistory]
+}
+
+struct JiraHistory: Codable, Hashable {
+    let id: String
+    let author: JiraUser
+    let created: String
+    let items: [JiraHistoryItem]
+}
+
+struct JiraHistoryItem: Codable, Hashable {
+    let field: String
+    let fromString: String?
+    let toString: String?
 }
 
 struct TimeLogEntry: Codable, Identifiable {

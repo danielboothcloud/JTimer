@@ -30,7 +30,7 @@ struct UpdatesView: View {
                     Text("No recent updates")
                         .font(.headline)
                         .foregroundColor(.secondary)
-                    Text("Issues assigned to you or mentioning you updated in the last 3 days will appear here")
+                    Text("Issues assigned to you or mentioning you updated by others will appear here")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -85,26 +85,55 @@ struct UpdateRowView: View {
     }
     
     private var contextInfo: (text: String, icon: String, color: Color) {
-        // Check for new comments first (most likely 'update')
-        if let lastComment = issue.comments.last, issue.updated != nil {
-            // Parse comment date
-            let commentDateFormatter = ISO8601DateFormatter()
-            commentDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            // Simplify: just check if author is different from current user
+        // 1. Check for new comments first (highest priority)
+        if let lastComment = issue.comments.last {
             if let user = currentUser, lastComment.author.accountId != user.accountId {
                 return ("Comment by \(lastComment.author.displayName)", "bubble.left.fill", .orange)
             }
         }
         
-        // Check if recently assigned
-        if let assignee = issue.assignee, let user = currentUser, assignee == user.displayName {
-             // If created recently and assigned to me
-             if let created = issue.created, Date().timeIntervalSince(created) < 86400 * 3 {
-                 return ("Assigned to you", "person.fill.checkmark", .green)
-             }
+        // 2. Check changelog for status or assignment changes
+        if let changelog = issue.changelog, let latestHistory = changelog.histories.last {
+            // Only show if it's not by current user
+            if let user = currentUser, latestHistory.author.accountId != user.accountId {
+                // Find most interesting item (prefer status)
+                let items = latestHistory.items
+                if let statusItem = items.first(where: { $0.field == "status" }) {
+                    return ("Status: \(statusItem.toString ?? "Updated")", "arrow.left.arrow.right", .purple)
+                }
+                
+                if let assigneeItem = items.first(where: { $0.field == "assignee" }) {
+                    if let toString = assigneeItem.toString, toString == user.displayName {
+                        return ("Assigned to you", "person.badge.plus", .blue)
+                    }
+                    return ("Reassigned", "person.2.fill", .secondary)
+                }
+                
+                if items.contains(where: { $0.field == "description" }) {
+                    return ("Description updated", "doc.text.fill", .secondary)
+                }
+                
+                if items.contains(where: { $0.field == "summary" }) {
+                    return ("Title updated", "pencil.and.outline", .secondary)
+                }
+                
+                if let anyItem = items.first {
+                    return ("\(anyItem.field.capitalized) updated", "pencil", .secondary)
+                }
+            }
         }
         
-        // Default
+        // 3. Fallback to assigned logic (if no changelog match)
+        if let assignee = issue.assignee, let user = currentUser, assignee == user.displayName {
+             // If created recently (less than 3 days), it's a new ticket
+             if let created = issue.created, Date().timeIntervalSince(created) < 86400 * 3 {
+                 return ("New Ticket", "sparkles", .green)
+             }
+             // Otherwise, it's an update on a ticket assigned to you
+             return ("Assigned to you", "person.fill.checkmark", .blue)
+        }
+        
+        // 4. Default
         return ("Updated", "pencil", .secondary)
     }
 

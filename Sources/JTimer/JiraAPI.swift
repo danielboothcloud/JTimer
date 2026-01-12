@@ -161,7 +161,7 @@ class JiraAPI: ObservableObject {
 
         // Use the new /search/jql endpoint for API v3, old /search for v2
         let endpoint = apiVersion >= 3 ? "/search/jql" : "/search"
-        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created,comment&maxResults=50"
+        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created,comment&expand=changelog&maxResults=50"
 
         print("🔍 JTimer: Search URL (API v\(apiVersion)): \(urlString)")
 
@@ -200,8 +200,17 @@ class JiraAPI: ObservableObject {
                 throw JiraAPIError.serverError(httpResponse.statusCode)
             }
 
-            let searchResponse = try JSONDecoder().decode(JiraSearchResponse.self, from: data)
-            return searchResponse.issues
+            do {
+                let searchResponse = try JSONDecoder().decode(JiraSearchResponse.self, from: data)
+                return searchResponse.issues
+            } catch let decodingError as DecodingError {
+                print("🚨 JTimer: JSON Decoding Error: \(decodingError)")
+                // Print a snippet of the JSON to help debug
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("📄 JTimer: JSON Context: \(responseString.prefix(1000))...")
+                }
+                throw decodingError
+            }
         } catch {
             print("🚨 JTimer: Search error (API v\(apiVersion)): \(error)")
             throw error
@@ -280,6 +289,8 @@ class JiraAPI: ObservableObject {
     }
 
     func fetchUpdates(days: Int = 3) async throws -> [JiraIssue] {
+        // Fetch issues updated recently by others that are relevant to the user
+        // Reverting strict filter for debugging:
         let jql = "(assignee = currentUser() OR text ~ currentUser()) AND updated >= -3d ORDER BY updated DESC"
         return try await searchIssues(jql: jql)
     }
