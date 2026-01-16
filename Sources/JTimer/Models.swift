@@ -224,43 +224,60 @@ struct AppSettings {
             defaults.set(newValue, forKey: "JiraAPI.defaultJQL")
         }
     }
+
+    var customJQLTemplates: [JQLTemplate] {
+        get {
+            if let data = defaults.data(forKey: "JiraAPI.customTemplates"),
+               let templates = try? JSONDecoder().decode([JQLTemplate].self, from: data) {
+                return templates
+            }
+            return []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "JiraAPI.customTemplates")
+            }
+        }
+    }
 }
 
-struct JQLTemplate {
+struct JQLTemplate: Codable, Identifiable, Equatable {
+    let id: UUID
     let name: String
     let query: String
-    let description: String
+    let isCustom: Bool
+
+    init(name: String, query: String, isCustom: Bool = false) {
+        self.id = UUID()
+        self.name = name
+        self.query = query
+        self.isCustom = isCustom
+    }
 
     static let commonTemplates = [
         JQLTemplate(
             name: "My Open Issues",
-            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Completed, Resolved, Closed)",
-            description: "All open issues assigned to you"
+            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Completed, Resolved, Closed)"
         ),
         JQLTemplate(
             name: "My Recent Issues",
-            query: "assignee = currentUser() ORDER BY updated DESC",
-            description: "All your issues sorted by most recent"
+            query: "assignee = currentUser() ORDER BY updated DESC"
         ),
         JQLTemplate(
             name: "My In Progress",
-            query: "assignee = currentUser() AND (status = \"In Progress\" OR status = \"Work in Progress\")",
-            description: "Issues you're currently working on"
+            query: "assignee = currentUser() AND (status = \"In Progress\" OR status = \"Work in Progress\")"
         ),
         JQLTemplate(
             name: "My Todo",
-            query: "assignee = currentUser() AND status = \"To Do\"",
-            description: "Issues ready for you to start"
+            query: "assignee = currentUser() AND status = \"To Do\""
         ),
         JQLTemplate(
             name: "All My Issues",
-            query: "assignee = currentUser()",
-            description: "Every issue assigned to you"
+            query: "assignee = currentUser()"
         ),
         JQLTemplate(
             name: "Recent Updates",
-            query: "assignee = currentUser() AND updated >= -7d",
-            description: "Your issues updated in the last week"
+            query: "assignee = currentUser() AND updated >= -7d"
         )
     ]
 }

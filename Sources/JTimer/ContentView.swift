@@ -39,6 +39,11 @@ struct ContentView: View {
     @State private var timeLogHistory: [TimeLogEntry] = []
     @State private var showingUpdates = false
     @State private var recentUpdates: [JiraIssue] = []
+    @State private var customJQLTemplates: [JQLTemplate] = []
+
+    var allTemplates: [JQLTemplate] {
+        JQLTemplate.commonTemplates + customJQLTemplates
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,6 +60,7 @@ struct ContentView: View {
         .onAppear {
             loadIssuesIfNeeded()
             loadLogHistory()
+            loadCustomTemplates()
         }
         .sheet(item: $pendingTimerResult) { result in
             LogConfirmationView(
@@ -225,20 +231,15 @@ struct ContentView: View {
 
             HStack {
                 Menu {
-                    ForEach(JQLTemplate.commonTemplates, id: \.name) { template in
+                    ForEach(allTemplates, id: \.id) { template in
                         Button(action: {
                             customJQL = template.query
                             Task {
                                 await loadIssues(jql: template.query)
                             }
                         }) {
-                            VStack(alignment: .leading) {
-                                Text(template.name)
-                                    .font(.caption)
-                                Text(template.description)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
+                            Text(template.name)
+                                .font(.caption)
                         }
                     }
 
@@ -581,6 +582,10 @@ struct ContentView: View {
 
     private func saveLogHistory() {
         // No longer needed - we fetch from Jira
+    }
+
+    private func loadCustomTemplates() {
+        customJQLTemplates = AppSettings().customJQLTemplates
     }
 
     private func loadLogHistory() {
