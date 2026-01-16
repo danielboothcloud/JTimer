@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 
-class MenuBarManager: ObservableObject {
+class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var timerManager: TimerManager?
@@ -34,11 +34,16 @@ class MenuBarManager: ObservableObject {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 400, height: 500)
         popover?.behavior = .semitransient
+        popover?.delegate = self
         popover?.contentViewController = NSHostingController(
             rootView: ContentView()
                 .environmentObject(timerManager)
                 .environmentObject(jiraAPI)
         )
+    }
+
+    func popoverWillClose(_ notification: Notification) {
+        NotificationCenter.default.post(name: Notification.Name("PopoverWillClose"), object: nil)
     }
 
     private func observeTimerChanges() {
@@ -214,7 +219,13 @@ class MenuBarManager: ObservableObject {
               let button = statusItem?.button else { return }
 
         NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+        // Calculate the visual bounds of the icon only, not the entire button
+        // When timer is running, button has icon + text, we want to anchor to the icon part
+        let iconWidth: CGFloat = timerManager?.isRunning == true ? 32 : button.bounds.width
+        let iconBounds = NSRect(x: button.bounds.minX, y: button.bounds.minY, width: iconWidth, height: button.bounds.height)
+
+        popover.show(relativeTo: iconBounds, of: button, preferredEdge: .minY)
 
         // Install event monitor to detect clicks outside popover
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in

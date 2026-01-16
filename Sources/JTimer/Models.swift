@@ -8,14 +8,22 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let assignee: String?
     let issueType: String
     let project: String
+    let updated: Date?
+    let created: Date?
+    let comments: [JiraComment]
+    let changelog: JiraChangelog?
 
     enum CodingKeys: String, CodingKey {
-        case id, key
+        case id, key, changelog
         case fields
     }
 
     enum FieldKeys: String, CodingKey {
-        case summary, status, assignee, issuetype, project
+        case summary, status, assignee, issuetype, project, updated, created, comment
+    }
+    
+    enum CommentKeys: String, CodingKey {
+        case comments
     }
 
     enum StatusKeys: String, CodingKey {
@@ -38,6 +46,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         key = try container.decode(String.self, forKey: .key)
+        changelog = try container.decodeIfPresent(JiraChangelog.self, forKey: .changelog)
 
         let fields = try container.nestedContainer(keyedBy: FieldKeys.self, forKey: .fields)
         summary = try fields.decode(String.self, forKey: .summary)
@@ -56,12 +65,85 @@ struct JiraIssue: Codable, Identifiable, Hashable {
 
         let projectContainer = try fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
         project = try projectContainer.decode(String.self, forKey: .name)
+        
+        // Parse dates
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        
+        if let updatedString = try? fields.decode(String.self, forKey: .updated) {
+            updated = dateFormatter.date(from: updatedString)
+        } else {
+            updated = nil
+        }
+        
+        if let createdString = try? fields.decode(String.self, forKey: .created) {
+            created = dateFormatter.date(from: createdString)
+        } else {
+            created = nil
+        }
+        
+        // Parse comments
+        if let commentContainer = try? fields.nestedContainer(keyedBy: CommentKeys.self, forKey: .comment) {
+            comments = try commentContainer.decode([JiraComment].self, forKey: .comments)
+        } else {
+            comments = []
+        }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(key, forKey: .key)
+    }
+}
+
+struct JiraUser: Codable, Hashable {
+    let accountId: String
+    let displayName: String
+    let emailAddress: String?
+}
+
+struct JiraComment: Codable, Hashable {
+    let id: String
+    let author: JiraUser
+    let created: String
+    // We don't parse body for now to avoid complexity with ADF
+}
+
+struct JiraChangelog: Codable, Hashable {
+    let histories: [JiraHistory]
+}
+
+struct JiraHistory: Codable, Hashable {
+    let id: String
+    let author: JiraUser
+    let created: String
+    let items: [JiraHistoryItem]
+}
+
+struct JiraHistoryItem: Codable, Hashable {
+    let field: String
+    let fromString: String?
+    let toString: String?
+}
+
+struct TimeLogEntry: Codable, Identifiable {
+    let id: UUID
+    let issueKey: String
+    let issueSummary: String
+    let duration: TimeInterval
+    let startTime: Date
+    let loggedAt: Date
+    var description: String
+    
+    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date) {
+        self.id = UUID()
+        self.issueKey = issueKey
+        self.issueSummary = issueSummary
+        self.duration = duration
+        self.startTime = startTime
+        self.loggedAt = loggedAt
+        self.description = description
     }
 }
 
@@ -75,12 +157,10 @@ struct JiraSearchResponse: Codable {
         issues = try container.decode([JiraIssue].self, forKey: .issues)
         total = try container.decodeIfPresent(Int.self, forKey: .total)
     }
-}
-
-struct JiraUser: Codable {
-    let accountId: String
-    let displayName: String
-    let emailAddress: String
+    
+    enum CodingKeys: String, CodingKey {
+        case issues, total
+    }
 }
 
 struct WorkLogEntry: Codable {
@@ -144,43 +224,52 @@ struct AppSettings {
             defaults.set(newValue, forKey: "JiraAPI.defaultJQL")
         }
     }
+
+    var customJQLTemplates: [JQLTemplate] {
+        get {
+            if let data = defaults.data(forKey: "JiraAPI.customTemplates"),
+               let templates = try? JSONDecoder().decode([JQLTemplate].self, from: data) {
+                return templates
+            }
+            return []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "JiraAPI.customTemplates")
+            }
+        }
+    }
 }
 
-struct JQLTemplate {
+struct JQLTemplate: Codable, Identifiable, Equatable {
+    let id: UUID
     let name: String
     let query: String
-    let description: String
+    let isCustom: Bool
+
+    init(name: String, query: String, isCustom: Bool = false) {
+        self.id = UUID()
+        self.name = name
+        self.query = query
+        self.isCustom = isCustom
+    }
 
     static let commonTemplates = [
         JQLTemplate(
             name: "My Open Issues",
-            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Resolved, Closed)",
-            description: "All open issues assigned to you"
+            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Completed, Resolved, Closed)"
         ),
         JQLTemplate(
             name: "My Recent Issues",
-            query: "assignee = currentUser() ORDER BY updated DESC",
-            description: "All your issues sorted by most recent"
+            query: "assignee = currentUser() ORDER BY updated DESC"
         ),
         JQLTemplate(
             name: "My In Progress",
-            query: "assignee = currentUser() AND status = \"In Progress\"",
-            description: "Issues you're currently working on"
-        ),
-        JQLTemplate(
-            name: "My Todo",
-            query: "assignee = currentUser() AND status = \"To Do\"",
-            description: "Issues ready for you to start"
+            query: "assignee = currentUser() AND (status = \"In Progress\" OR status = \"Work in Progress\")"
         ),
         JQLTemplate(
             name: "All My Issues",
-            query: "assignee = currentUser()",
-            description: "Every issue assigned to you"
-        ),
-        JQLTemplate(
-            name: "Recent Updates",
-            query: "assignee = currentUser() AND updated >= -7d",
-            description: "Your issues updated in the last week"
+            query: "assignee = currentUser()"
         )
     ]
 }
