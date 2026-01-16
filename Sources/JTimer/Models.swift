@@ -268,16 +268,8 @@ struct JQLTemplate: Codable, Identifiable, Equatable {
             query: "assignee = currentUser() AND (status = \"In Progress\" OR status = \"Work in Progress\")"
         ),
         JQLTemplate(
-            name: "My Todo",
-            query: "assignee = currentUser() AND status = \"To Do\""
-        ),
-        JQLTemplate(
             name: "All My Issues",
             query: "assignee = currentUser()"
-        ),
-        JQLTemplate(
-            name: "Recent Updates",
-            query: "assignee = currentUser() AND updated >= -7d"
         )
     ]
 }
