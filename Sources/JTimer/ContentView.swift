@@ -221,7 +221,7 @@ struct ContentView: View {
 
                 Button("Refresh") {
                     Task {
-                        await loadIssues()
+                        await loadIssues(jql: customJQL.isEmpty ? nil : customJQL)
                     }
                 }
                 .buttonStyle(.borderedProminent)
