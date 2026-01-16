@@ -219,7 +219,13 @@ class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
               let button = statusItem?.button else { return }
 
         NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+        // Calculate the visual bounds of the icon only, not the entire button
+        // When timer is running, button has icon + text, we want to anchor to the icon part
+        let iconWidth: CGFloat = timerManager?.isRunning == true ? 32 : button.bounds.width
+        let iconBounds = NSRect(x: button.bounds.minX, y: button.bounds.minY, width: iconWidth, height: button.bounds.height)
+
+        popover.show(relativeTo: iconBounds, of: button, preferredEdge: .minY)
 
         // Install event monitor to detect clicks outside popover
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in

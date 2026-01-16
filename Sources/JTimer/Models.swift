@@ -234,7 +234,7 @@ struct JQLTemplate {
     static let commonTemplates = [
         JQLTemplate(
             name: "My Open Issues",
-            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Resolved, Closed)",
+            query: "assignee = currentUser() AND status NOT IN (Done, Complete, Completed, Resolved, Closed)",
             description: "All open issues assigned to you"
         ),
         JQLTemplate(
@@ -244,7 +244,7 @@ struct JQLTemplate {
         ),
         JQLTemplate(
             name: "My In Progress",
-            query: "assignee = currentUser() AND status = \"In Progress\" OR status = \"Work in Progress\"",
+            query: "assignee = currentUser() AND (status = \"In Progress\" OR status = \"Work in Progress\")",
             description: "Issues you're currently working on"
         ),
         JQLTemplate(

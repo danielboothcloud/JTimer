@@ -470,7 +470,7 @@ struct ContentView: View {
 
         // Define fallback queries to try if no custom JQL provided
         let fallbackQueries = [
-            "assignee = currentUser() AND status NOT IN (Done, Complete, Resolved, Closed)",
+            "assignee = currentUser() AND status NOT IN (Done, Complete, Completed, Resolved, Closed)",
             "assignee = currentUser() AND status != Done",
             "assignee = currentUser()",
             "assignee = currentUser() ORDER BY updated DESC"
