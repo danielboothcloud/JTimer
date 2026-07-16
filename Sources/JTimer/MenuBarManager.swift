@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 import Combine
 
-class MenuBarManager: ObservableObject {
+@MainActor
+final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var timerManager: TimerManager?
@@ -10,6 +11,8 @@ class MenuBarManager: ObservableObject {
     private var eventMonitor: Any?
 
     func setup(timerManager: TimerManager, jiraAPI: JiraAPI) {
+        guard statusItem == nil else { return }
+
         self.timerManager = timerManager
         self.jiraAPI = jiraAPI
         setupMenuBar()
@@ -34,6 +37,7 @@ class MenuBarManager: ObservableObject {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 400, height: 500)
         popover?.behavior = .semitransient
+        popover?.delegate = self
         popover?.contentViewController = NSHostingController(
             rootView: ContentView()
                 .environmentObject(timerManager)
@@ -213,29 +217,35 @@ class MenuBarManager: ObservableObject {
         guard let popover = popover,
               let button = statusItem?.button else { return }
 
-        NSApp.activate(ignoringOtherApps: true)
+        // AppKit chooses the screen from the status item's window. Setting the
+        // positioning rect explicitly avoids reusing stale geometry after a
+        // display arrangement or active-screen change.
+        popover.positioningRect = button.bounds
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
 
         // Install event monitor to detect clicks outside popover
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            self?.closePopover()
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.closePopover()
+            }
         }
     }
 
     private func closePopover() {
         popover?.performClose(nil)
 
-        // Remove event monitor
+        removeEventMonitor()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        removeEventMonitor()
+    }
+
+    private func removeEventMonitor() {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
-    }
-
-    deinit {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        statusItem = nil
     }
 }

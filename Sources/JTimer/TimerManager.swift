@@ -1,10 +1,8 @@
 import Foundation
 
+@MainActor
 class TimerManager: ObservableObject {
     @Published var currentState: TimerState = .idle
-    @Published var elapsedTime: TimeInterval = 0
-
-    private var timer: Timer?
 
     var isRunning: Bool {
         if case .running = currentState {
@@ -25,7 +23,6 @@ class TimerManager: ObservableObject {
     func startTimer(for issue: JiraIssue) {
         _ = stopTimer()
         currentState = .running(startTime: Date(), issue: issue)
-        startInternalTimer()
         print("Timer started for issue: \(issue.key)")
     }
 
@@ -41,8 +38,6 @@ class TimerManager: ObservableObject {
         }
 
         currentState = .idle
-        elapsedTime = 0
-        stopInternalTimer()
 
         if let result = result {
             print("Timer stopped for issue: \(result.issue.key), duration: \(Int(result.duration))s")
@@ -51,27 +46,8 @@ class TimerManager: ObservableObject {
         return result
     }
 
-    private func startInternalTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.updateElapsedTime()
-        }
-    }
-
-    private func stopInternalTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    private func updateElapsedTime() {
-        switch currentState {
-        case .running(let startTime, _):
-            elapsedTime = Date().timeIntervalSince(startTime)
-        case .idle:
-            elapsedTime = 0
-        }
-    }
-
-    func formattedElapsedTime() -> String {
+    static func formattedElapsedTime(since startTime: Date, now: Date = Date()) -> String {
+        let elapsedTime = max(0, now.timeIntervalSince(startTime))
         let hours = Int(elapsedTime) / 3600
         let minutes = Int(elapsedTime) / 60 % 60
         let seconds = Int(elapsedTime) % 60
