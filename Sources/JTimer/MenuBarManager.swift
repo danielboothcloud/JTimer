@@ -8,7 +8,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var popover: NSPopover?
     private var timerManager: TimerManager?
     private var jiraAPI: JiraAPI?
-    private var eventMonitor: Any?
 
     func setup(timerManager: TimerManager, jiraAPI: JiraAPI) {
         guard statusItem == nil else { return }
@@ -36,7 +35,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 400, height: 500)
-        popover?.behavior = .semitransient
+        popover?.behavior = .transient
         popover?.delegate = self
         popover?.contentViewController = NSHostingController(
             rootView: ContentView()
@@ -219,40 +218,16 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
     private func showPopover() {
         guard let popover = popover,
-              let button = statusItem?.button else { return }
+              let button = statusItem?.button,
+              button.window != nil else { return }
 
+        // Let AppKit derive the correct screen and anchor from the status-item
+        // button. Manual positioning can retain stale multi-display geometry.
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
-
-        // Anchor to the icon rather than the ticket text while recording. Set
-        // the positioning rect on every open so AppKit uses current display geometry.
-        let iconWidth: CGFloat = timerManager?.isRunning == true ? 32 : button.bounds.width
-        let iconBounds = NSRect(x: button.bounds.minX, y: button.bounds.minY, width: iconWidth, height: button.bounds.height)
-
-        popover.positioningRect = iconBounds
-        popover.show(relativeTo: iconBounds, of: button, preferredEdge: .minY)
-
-        // Install event monitor to detect clicks outside popover
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.closePopover()
-            }
-        }
     }
 
     private func closePopover() {
         popover?.performClose(nil)
-
-        removeEventMonitor()
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        removeEventMonitor()
-    }
-
-    private func removeEventMonitor() {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
-        }
     }
 }
