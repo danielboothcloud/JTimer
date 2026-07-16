@@ -79,7 +79,6 @@ if [ -f "${APP_DIR}/Contents/MacOS/${APP_NAME}" ] && [ -f "${APP_DIR}/Contents/I
     echo "🚀 You can now:"
     echo "   • Double-click ${APP_NAME}.app to launch"
     echo "   • Copy to /Applications folder"
-    echo "   • Create installer with: ./package-dmg.sh"
     echo ""
 
     # Show app bundle info

@@ -45,6 +45,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         )
     }
 
+    func popoverWillClose(_ notification: Notification) {
+        NotificationCenter.default.post(name: Notification.Name("PopoverWillClose"), object: nil)
+    }
+
     private func observeTimerChanges() {
         guard let timerManager = timerManager else { return }
 
@@ -217,12 +221,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         guard let popover = popover,
               let button = statusItem?.button else { return }
 
-        // AppKit chooses the screen from the status item's window. Setting the
-        // positioning rect explicitly avoids reusing stale geometry after a
-        // display arrangement or active-screen change.
-        popover.positioningRect = button.bounds
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
+
+        // Anchor to the icon rather than the ticket text while recording. Set
+        // the positioning rect on every open so AppKit uses current display geometry.
+        let iconWidth: CGFloat = timerManager?.isRunning == true ? 32 : button.bounds.width
+        let iconBounds = NSRect(x: button.bounds.minX, y: button.bounds.minY, width: iconWidth, height: button.bounds.height)
+
+        popover.positioningRect = iconBounds
+        popover.show(relativeTo: iconBounds, of: button, preferredEdge: .minY)
 
         // Install event monitor to detect clicks outside popover
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

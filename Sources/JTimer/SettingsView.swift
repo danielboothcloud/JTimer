@@ -11,6 +11,12 @@ struct SettingsView: View {
     @State private var isValidating = false
     @State private var validationMessage = ""
 
+    // Custom JQL templates
+    @State private var customTemplates: [JQLTemplate] = []
+    @State private var showingAddTemplate = false
+    @State private var newTemplateName = ""
+    @State private var newTemplateQuery = ""
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -140,6 +146,106 @@ struct SettingsView: View {
                         .background(Color.secondary.opacity(0.05))
                         .cornerRadius(6)
                     }
+
+                    // Custom JQL Templates Section
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Custom JQL Templates")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Spacer()
+
+                            Button(action: {
+                                showingAddTemplate.toggle()
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Add custom template")
+                        }
+
+                        if customTemplates.isEmpty {
+                            Text("No custom templates yet")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .padding(8)
+                        } else {
+                            VStack(spacing: 4) {
+                                ForEach(customTemplates) { template in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(template.name)
+                                                .font(.caption)
+                                            Text(template.query)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(1)
+                                        }
+
+                                        Spacer()
+
+                                        Button(action: {
+                                            deleteTemplate(template)
+                                        }) {
+                                            Image(systemName: "trash")
+                                                .font(.caption2)
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .help("Delete template")
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+
+                        if showingAddTemplate {
+                            Divider()
+
+                            VStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Name")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    TextField("My Custom Query", text: $newTemplateName)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("JQL Query")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    TextField("assignee = currentUser()", text: $newTemplateQuery)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+
+                                HStack(spacing: 8) {
+                                    Button("Cancel") {
+                                        showingAddTemplate = false
+                                        newTemplateName = ""
+                                        newTemplateQuery = ""
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .font(.caption)
+
+                                    Spacer()
+
+                                    Button("Save") {
+                                        addCustomTemplate()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .font(.caption)
+                                    .disabled(newTemplateName.isEmpty || newTemplateQuery.isEmpty)
+                                }
+                            }
+                            .padding(8)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+                    }
                 }
                 .padding()
             }
@@ -174,10 +280,35 @@ struct SettingsView: View {
         let settings = AppSettings()
         jiraDomain = settings.jiraDomain
         jiraEmail = settings.jiraEmail
+        customTemplates = settings.customJQLTemplates
 
         if let existingToken = KeychainManager().getToken() {
             jiraToken = existingToken
         }
+    }
+
+    private func addCustomTemplate() {
+        let newTemplate = JQLTemplate(
+            name: newTemplateName,
+            query: newTemplateQuery,
+            isCustom: true
+        )
+
+        customTemplates.append(newTemplate)
+
+        var settings = AppSettings()
+        settings.customJQLTemplates = customTemplates
+
+        showingAddTemplate = false
+        newTemplateName = ""
+        newTemplateQuery = ""
+    }
+
+    private func deleteTemplate(_ template: JQLTemplate) {
+        customTemplates.removeAll { $0.id == template.id }
+
+        var settings = AppSettings()
+        settings.customJQLTemplates = customTemplates
     }
 
     private func saveSettings() {
