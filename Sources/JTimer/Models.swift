@@ -21,7 +21,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     enum FieldKeys: String, CodingKey {
         case summary, status, assignee, issuetype, project, updated, created, comment
     }
-    
+
     enum CommentKeys: String, CodingKey {
         case comments
     }
@@ -65,23 +65,23 @@ struct JiraIssue: Codable, Identifiable, Hashable {
 
         let projectContainer = try fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
         project = try projectContainer.decode(String.self, forKey: .name)
-        
+
         // Parse dates
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
+
         if let updatedString = try? fields.decode(String.self, forKey: .updated) {
             updated = dateFormatter.date(from: updatedString)
         } else {
             updated = nil
         }
-        
+
         if let createdString = try? fields.decode(String.self, forKey: .created) {
             created = dateFormatter.date(from: createdString)
         } else {
             created = nil
         }
-        
+
         // Parse comments
         if let commentContainer = try? fields.nestedContainer(keyedBy: CommentKeys.self, forKey: .comment) {
             comments = try commentContainer.decode([JiraComment].self, forKey: .comments)
@@ -135,8 +135,8 @@ struct TimeLogEntry: Codable, Identifiable {
     let startTime: Date
     let loggedAt: Date
     var description: String
-    
-    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date) {
+
+    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date = Date()) {
         self.id = UUID()
         self.issueKey = issueKey
         self.issueSummary = issueSummary
@@ -157,7 +157,7 @@ struct JiraSearchResponse: Codable {
         issues = try container.decode([JiraIssue].self, forKey: .issues)
         total = try container.decodeIfPresent(Int.self, forKey: .total)
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case issues, total
     }

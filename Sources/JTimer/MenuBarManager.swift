@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 import Combine
 
-class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
+@MainActor
+final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var timerManager: TimerManager?
@@ -10,6 +11,8 @@ class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var eventMonitor: Any?
 
     func setup(timerManager: TimerManager, jiraAPI: JiraAPI) {
+        guard statusItem == nil else { return }
+
         self.timerManager = timerManager
         self.jiraAPI = jiraAPI
         setupMenuBar()
@@ -220,33 +223,36 @@ class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        // Calculate the visual bounds of the icon only, not the entire button
-        // When timer is running, button has icon + text, we want to anchor to the icon part
+        // Anchor to the icon rather than the ticket text while recording. Set
+        // the positioning rect on every open so AppKit uses current display geometry.
         let iconWidth: CGFloat = timerManager?.isRunning == true ? 32 : button.bounds.width
         let iconBounds = NSRect(x: button.bounds.minX, y: button.bounds.minY, width: iconWidth, height: button.bounds.height)
 
+        popover.positioningRect = iconBounds
         popover.show(relativeTo: iconBounds, of: button, preferredEdge: .minY)
 
         // Install event monitor to detect clicks outside popover
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            self?.closePopover()
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.closePopover()
+            }
         }
     }
 
     private func closePopover() {
         popover?.performClose(nil)
 
-        // Remove event monitor
+        removeEventMonitor()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        removeEventMonitor()
+    }
+
+    private func removeEventMonitor() {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
-    }
-
-    deinit {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        statusItem = nil
     }
 }

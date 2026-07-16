@@ -1,7 +1,8 @@
 import Foundation
 import Security
 
-class JiraAPI: ObservableObject {
+@MainActor
+final class JiraAPI: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: JiraUser?
     @Published var lastError: String?
@@ -71,7 +72,6 @@ class JiraAPI: ObservableObject {
         }
     }
 
-    @MainActor
     func validateConnection() async {
         do {
             let user = try await getCurrentUser()

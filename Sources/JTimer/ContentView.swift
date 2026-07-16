@@ -101,14 +101,16 @@ struct ContentView: View {
 
             Spacer()
 
-            if let currentIssue = timerManager.currentIssue {
+            if case .running(let startTime, let currentIssue) = timerManager.currentState {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(currentIssue.key)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(timerManager.formattedElapsedTime())
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.primary)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(TimerManager.formattedElapsedTime(since: startTime, now: context.date))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.primary)
+                    }
                 }
             }
 
@@ -445,7 +447,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func loadRecentUpdates() async {
         do {
             let updates = try await jiraAPI.fetchUpdates()
@@ -578,10 +580,6 @@ struct ContentView: View {
         } catch {
             print("Failed to log work: \(error)")
         }
-    }
-
-    private func saveLogHistory() {
-        // No longer needed - we fetch from Jira
     }
 
     private func loadCustomTemplates() {
