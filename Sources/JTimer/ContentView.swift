@@ -11,8 +11,8 @@ struct TimerResult: Identifiable {
 struct VisualEffectView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
+        view.material = .popover
+        view.blendingMode = .withinWindow
         view.state = .active
         return view
     }
