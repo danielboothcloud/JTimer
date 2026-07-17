@@ -107,7 +107,29 @@ struct JiraComment: Codable, Hashable {
     let id: String
     let author: JiraUser
     let created: String
-    // We don't parse body for now to avoid complexity with ADF
+    let body: JiraDocument?
+}
+
+struct JiraDocument: Codable, Hashable {
+    let type: String?
+    let text: String?
+    let attrs: JiraDocumentAttributes?
+    let content: [JiraDocument]?
+
+    var plainText: String {
+        let ownText = text ?? attrs?.text ?? ""
+        return ownText + (content ?? []).map(\.plainText).joined(separator: " ")
+    }
+
+    func mentions(accountId: String) -> Bool {
+        if type == "mention", attrs?.id == accountId { return true }
+        return (content ?? []).contains { $0.mentions(accountId: accountId) }
+    }
+}
+
+struct JiraDocumentAttributes: Codable, Hashable {
+    let id: String?
+    let text: String?
 }
 
 struct JiraChangelog: Codable, Hashable {
@@ -125,6 +147,45 @@ struct JiraHistoryItem: Codable, Hashable {
     let field: String
     let fromString: String?
     let toString: String?
+}
+
+enum JiraNotificationKind: String, Codable, CaseIterable {
+    case mention
+    case comment
+    case assigned
+    case status
+    case updated
+
+    var title: String {
+        switch self {
+        case .mention: return "Mentioned you"
+        case .comment: return "New comment"
+        case .assigned: return "Assigned to you"
+        case .status: return "Status changed"
+        case .updated: return "Issue updated"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .mention: return "at"
+        case .comment: return "bubble.left.fill"
+        case .assigned: return "person.badge.plus"
+        case .status: return "arrow.left.arrow.right"
+        case .updated: return "pencil"
+        }
+    }
+}
+
+struct JiraNotificationEvent: Codable, Identifiable, Hashable {
+    let id: String
+    let issueKey: String
+    let issueSummary: String
+    let kind: JiraNotificationKind
+    let message: String
+    let authorName: String
+    let date: Date
+    var isRead: Bool
 }
 
 struct TimeLogEntry: Codable, Identifiable {

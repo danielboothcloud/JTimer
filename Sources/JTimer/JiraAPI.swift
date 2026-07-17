@@ -288,10 +288,11 @@ final class JiraAPI: ObservableObject {
         }
     }
 
-    func fetchUpdates(days: Int = 3) async throws -> [JiraIssue] {
-        // Fetch issues updated recently by others that are relevant to the user
-        // Reverting strict filter for debugging:
-        let jql = "(assignee = currentUser() OR text ~ currentUser()) AND updated >= -3d ORDER BY updated DESC"
+    func fetchNotificationCandidates(days: Int = 7) async throws -> [JiraIssue] {
+        let safeDays = min(max(days, 1), 30)
+        // Jira has no user-notification inbox API. Pull issues most likely to be
+        // relevant, then turn their comment/changelog entries into local events.
+        let jql = "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -\(safeDays)d ORDER BY updated DESC"
         return try await searchIssues(jql: jql)
     }
 

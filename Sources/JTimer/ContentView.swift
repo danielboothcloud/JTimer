@@ -23,6 +23,7 @@ struct VisualEffectView: NSViewRepresentable {
 struct ContentView: View {
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var jiraAPI: JiraAPI
+    @EnvironmentObject var notificationManager: NotificationManager
     @State private var issues: [JiraIssue] = []
     @State private var filteredIssues: [JiraIssue] = []
     @State private var searchText = ""
@@ -38,7 +39,6 @@ struct ContentView: View {
     @State private var pendingDescription: String = ""
     @State private var timeLogHistory: [TimeLogEntry] = []
     @State private var showingUpdates = false
-    @State private var recentUpdates: [JiraIssue] = []
     @State private var customJQLTemplates: [JQLTemplate] = []
 
     var allTemplates: [JQLTemplate] {
@@ -114,8 +114,22 @@ struct ContentView: View {
                 }
             }
 
-            Button(action: { showingUpdates = true }) {
-                Image(systemName: "bell")
+            Button(action: {
+                showingUpdates = true
+                Task { await notificationManager.refresh() }
+            }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: notificationManager.unreadCount > 0 ? "bell.fill" : "bell")
+                    if notificationManager.unreadCount > 0 {
+                        Text("\(min(notificationManager.unreadCount, 99))")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(2)
+                            .background(Color.red)
+                            .clipShape(Circle())
+                            .offset(x: 7, y: -7)
+                    }
+                }
             }
             .buttonStyle(.borderless)
             .help("View recent updates")
@@ -156,16 +170,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingUpdates) {
             UpdatesView(
-                issues: $recentUpdates,
-                currentUser: jiraAPI.currentUser,
-                onSelect: { issue in
-                    showingUpdates = false
-                    // Add to issues list if not present so we can select it
-                    if !issues.contains(where: { $0.key == issue.key }) {
-                        issues.insert(issue, at: 0)
-                    }
-                    selectedIssue = issue
-                }
+                notificationManager: notificationManager
             )
         }
     }
@@ -443,19 +448,8 @@ struct ContentView: View {
                 }
             }
             Task {
-                await loadRecentUpdates()
+                await notificationManager.refresh()
             }
-        }
-    }
-
-    private func loadRecentUpdates() async {
-        do {
-            let updates = try await jiraAPI.fetchUpdates()
-            await MainActor.run {
-                recentUpdates = updates
-            }
-        } catch {
-            print("Failed to load updates: \(error)")
         }
     }
 

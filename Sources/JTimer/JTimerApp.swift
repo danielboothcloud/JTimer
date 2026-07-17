@@ -6,6 +6,7 @@ struct JTimerApp: App {
     @StateObject private var menuBarManager = MenuBarManager()
     @StateObject private var timerManager = TimerManager()
     @StateObject private var jiraAPI = JiraAPI()
+    @StateObject private var notificationManager = NotificationManager()
 
     var body: some Scene {
         WindowGroup {
@@ -26,7 +27,8 @@ struct JTimerApp: App {
 
     private func setupMenuBarApp() {
         NSApp.setActivationPolicy(.accessory)
-        menuBarManager.setup(timerManager: timerManager, jiraAPI: jiraAPI)
+        notificationManager.start(jiraAPI: jiraAPI)
+        menuBarManager.setup(timerManager: timerManager, jiraAPI: jiraAPI, notificationManager: notificationManager)
 
         // Hide the main window immediately
         if let window = NSApp.windows.first {

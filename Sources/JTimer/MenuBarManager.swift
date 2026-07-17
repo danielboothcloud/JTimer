@@ -8,12 +8,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var popover: NSPopover?
     private var timerManager: TimerManager?
     private var jiraAPI: JiraAPI?
+    private var notificationManager: NotificationManager?
 
-    func setup(timerManager: TimerManager, jiraAPI: JiraAPI) {
+    func setup(timerManager: TimerManager, jiraAPI: JiraAPI, notificationManager: NotificationManager) {
         guard statusItem == nil else { return }
 
         self.timerManager = timerManager
         self.jiraAPI = jiraAPI
+        self.notificationManager = notificationManager
         setupMenuBar()
     }
 
@@ -28,6 +30,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
         setupPopover()
         observeTimerChanges()
+        observeNotificationChanges()
     }
 
     private func setupPopover() {
@@ -41,6 +44,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
             rootView: ContentView()
                 .environmentObject(timerManager)
                 .environmentObject(jiraAPI)
+                .environmentObject(notificationManager!)
         )
     }
 
@@ -60,6 +64,17 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private var cancellables = Set<AnyCancellable>()
+
+    private func observeNotificationChanges() {
+        guard let notificationManager else { return }
+        notificationManager.$events
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, let timerManager = self.timerManager else { return }
+                self.updateMenuBarIcon(for: timerManager.currentState)
+            }
+            .store(in: &cancellables)
+    }
 
     private func updateMenuBarIcon(for state: TimerState) {
         guard let button = statusItem?.button else { return }
@@ -109,7 +124,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         // Adjust status item length to accommodate text
         switch state {
         case .idle:
-            statusItem?.length = NSStatusItem.squareLength
+            statusItem?.length = (notificationManager?.unreadCount ?? 0) > 0 ? NSStatusItem.variableLength : NSStatusItem.squareLength
         case .running:
             if !ticketReference.isEmpty {
                 statusItem?.length = NSStatusItem.variableLength
@@ -128,11 +143,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private func getTitleText(for state: TimerState, ticketReference: String) -> String {
+        let unread = notificationManager?.unreadCount ?? 0
+        let badge = unread > 0 ? " \(min(unread, 99))" : ""
         switch state {
         case .idle:
-            return ""
+            return badge
         case .running:
-            return ticketReference.isEmpty ? "" : " \(ticketReference)"
+            return ticketReference.isEmpty ? badge : " \(ticketReference)\(badge)"
         }
     }
 
