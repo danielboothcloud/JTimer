@@ -46,50 +46,61 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerView
-            Divider()
-
-            if jiraAPI.isAuthenticated {
-                mainContent
+        Group {
+            if let result = pendingTimerResult {
+                LogConfirmationView(
+                    timerResult: result,
+                    jiraDomain: AppSettings().jiraDomain,
+                    initialDescription: pendingDescription,
+                    onConfirm: { adjustedDuration, description, alsoAddAsComment in
+                        Task {
+                            await logWorkToJira(
+                                issue: result.issue,
+                                startTime: result.startTime,
+                                duration: adjustedDuration,
+                                comment: description,
+                                alsoAddAsComment: alsoAddAsComment
+                            )
+                        }
+                        pendingTimerResult = nil
+                        pendingDescription = ""
+                    },
+                    onCancel: {
+                        pendingTimerResult = nil
+                        pendingDescription = ""
+                    }
+                )
+            } else if showingUpdates {
+                UpdatesView(notificationManager: notificationManager) {
+                    showingUpdates = false
+                }
+            } else if showingHistory {
+                LogHistoryView(
+                    logs: $timeLogHistory,
+                    onEditLog: editLog,
+                    onClose: { showingHistory = false }
+                )
+            } else if showingSettings {
+                SettingsView(onClose: { showingSettings = false })
+                    .environmentObject(jiraAPI)
             } else {
-                authenticationPrompt
+                VStack(spacing: 0) {
+                    headerView
+                    Divider()
+
+                    if jiraAPI.isAuthenticated {
+                        mainContent
+                    } else {
+                        authenticationPrompt
+                    }
+                }
+                .frame(width: 400, height: 500)
             }
         }
-        .frame(width: 400, height: 500)
         .onAppear {
             loadIssuesIfNeeded()
             loadLogHistory()
             loadCustomTemplates()
-        }
-        .sheet(item: $pendingTimerResult) { result in
-            LogConfirmationView(
-                timerResult: result,
-                jiraDomain: AppSettings().jiraDomain,
-                initialDescription: pendingDescription,
-                onConfirm: { adjustedDuration, description, alsoAddAsComment in
-                    Task {
-                        await logWorkToJira(
-                            issue: result.issue,
-                            startTime: result.startTime,
-                            duration: adjustedDuration,
-                            comment: description,
-                            alsoAddAsComment: alsoAddAsComment
-                        )
-                    }
-                    pendingTimerResult = nil
-                    pendingDescription = ""
-                },
-                onCancel: {
-                    pendingTimerResult = nil
-                    pendingDescription = ""
-                }
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("PopoverWillClose"))) { _ in
-            showingUpdates = false
-            showingHistory = false
-            showingSettings = false
         }
     }
 
@@ -147,30 +158,16 @@ struct ContentView: View {
             .help("Settings")
         }
         .padding()
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
-                .environmentObject(jiraAPI)
-        }
-        .sheet(isPresented: $showingHistory) {
-            LogHistoryView(
-                logs: $timeLogHistory,
-                onEditLog: { log in
-                    showingHistory = false
-                    pendingDescription = log.description
-                    // Create a timer result from the log entry
-                    if let issue = issues.first(where: { $0.key == log.issueKey }) {
-                        pendingTimerResult = TimerResult(
-                            issue: issue,
-                            startTime: log.startTime,
-                            duration: log.duration
-                        )
-                    }
-                }
-            )
-        }
-        .sheet(isPresented: $showingUpdates) {
-            UpdatesView(
-                notificationManager: notificationManager
+    }
+
+    private func editLog(_ log: TimeLogEntry) {
+        showingHistory = false
+        pendingDescription = log.description
+        if let issue = issues.first(where: { $0.key == log.issueKey }) {
+            pendingTimerResult = TimerResult(
+                issue: issue,
+                startTime: log.startTime,
+                duration: log.duration
             )
         }
     }
@@ -958,7 +955,7 @@ struct LogConfirmationView: View {
 struct LogHistoryView: View {
     @Binding var logs: [TimeLogEntry]
     let onEditLog: (TimeLogEntry) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -968,7 +965,7 @@ struct LogHistoryView: View {
                     .font(.headline)
                 Spacer()
                 Button("Done") {
-                    dismiss()
+                    onClose()
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -1002,7 +999,7 @@ struct LogHistoryView: View {
                 }
             }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 400, height: 500)
         .background(VisualEffectView())
     }
 }

@@ -49,7 +49,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     func popoverWillClose(_ notification: Notification) {
-        NotificationCenter.default.post(name: Notification.Name("PopoverWillClose"), object: nil)
+        // Keep the hosting controller and all SwiftUI presentation state alive.
+        // Reopening the menu-bar popover restores the exact sheet and draft that
+        // was visible before the user clicked elsewhere.
     }
 
     private func observeTimerChanges() {

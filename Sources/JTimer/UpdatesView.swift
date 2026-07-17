@@ -2,7 +2,7 @@ import SwiftUI
 
 struct UpdatesView: View {
     @ObservedObject var notificationManager: NotificationManager
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +19,7 @@ struct UpdatesView: View {
                 Button("Mark All Read") { notificationManager.markAllRead() }
                     .controlSize(.small)
                     .disabled(notificationManager.unreadCount == 0)
-                Button("Done") { dismiss() }
+                Button("Done") { onClose() }
                     .buttonStyle(.borderedProminent).controlSize(.small)
             }
             .padding()
@@ -52,7 +52,7 @@ struct UpdatesView: View {
                 }
             }
         }
-        .frame(width: 500, height: 520)
+        .frame(width: 400, height: 500)
         .background(VisualEffectView())
     }
 }
