@@ -320,17 +320,14 @@ struct SettingsView: View {
         isValidating = true
         validationMessage = "Validating connection..."
 
-        jiraAPI.configure(domain: jiraDomain, email: jiraEmail, token: jiraToken)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        Task {
+            let succeeded = await jiraAPI.configure(domain: jiraDomain, email: jiraEmail, token: jiraToken)
             isValidating = false
-            if jiraAPI.isAuthenticated {
+            if succeeded {
                 validationMessage = "Connection successful!"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    if let onClose { onClose() } else { dismiss() }
-                }
+                if let onClose { onClose() } else { dismiss() }
             } else {
-                validationMessage = "Connection failed. Please check your credentials."
+                validationMessage = jiraAPI.lastError ?? "Connection failed. Please check your credentials."
             }
         }
     }

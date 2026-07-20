@@ -1,11 +1,20 @@
 import SwiftUI
 import AppKit
 
-struct TimerResult: Identifiable {
-    let id = UUID()
+struct TimerResult: Identifiable, Codable {
+    let id: UUID
     let issue: JiraIssue
     let startTime: Date
     let duration: TimeInterval
+    let worklogID: String?
+
+    init(id: UUID = UUID(), issue: JiraIssue, startTime: Date, duration: TimeInterval, worklogID: String? = nil) {
+        self.id = id
+        self.issue = issue
+        self.startTime = startTime
+        self.duration = duration
+        self.worklogID = worklogID
+    }
 }
 
 struct VisualEffectView: NSViewRepresentable {
@@ -40,6 +49,10 @@ struct ContentView: View {
     @State private var timeLogHistory: [TimeLogEntry] = []
     @State private var showingUpdates = false
     @State private var customJQLTemplates: [JQLTemplate] = []
+    @State private var isSubmittingWorklog = false
+    @State private var worklogError: String?
+    @State private var issueLoadTask: Task<Void, Never>?
+    private let pendingWorklogKey = "JTimer.pendingWorklog.v1"
 
     var allTemplates: [JQLTemplate] {
         JQLTemplate.commonTemplates + customJQLTemplates
@@ -52,22 +65,29 @@ struct ContentView: View {
                     timerResult: result,
                     jiraDomain: AppSettings().jiraDomain,
                     initialDescription: pendingDescription,
+                    isSubmitting: isSubmittingWorklog,
+                    errorMessage: worklogError,
                     onConfirm: { adjustedDuration, description, alsoAddAsComment in
                         Task {
-                            await logWorkToJira(
+                            let succeeded = await logWorkToJira(
                                 issue: result.issue,
+                                worklogID: result.worklogID,
                                 startTime: result.startTime,
                                 duration: adjustedDuration,
                                 comment: description,
                                 alsoAddAsComment: alsoAddAsComment
                             )
+                            if succeeded {
+                                pendingTimerResult = nil
+                                pendingDescription = ""
+                                clearPendingWorklog()
+                            }
                         }
-                        pendingTimerResult = nil
-                        pendingDescription = ""
                     },
                     onCancel: {
                         pendingTimerResult = nil
                         pendingDescription = ""
+                        clearPendingWorklog()
                     }
                 )
             } else if showingUpdates {
@@ -101,6 +121,11 @@ struct ContentView: View {
             loadIssuesIfNeeded()
             loadLogHistory()
             loadCustomTemplates()
+            restorePendingWorklog()
+        }
+        .onDisappear { issueLoadTask?.cancel() }
+        .onChange(of: jiraAPI.isAuthenticated) { authenticated in
+            if authenticated { startIssueLoad() }
         }
     }
 
@@ -163,13 +188,16 @@ struct ContentView: View {
     private func editLog(_ log: TimeLogEntry) {
         showingHistory = false
         pendingDescription = log.description
-        if let issue = issues.first(where: { $0.key == log.issueKey }) {
-            pendingTimerResult = TimerResult(
+        let issue = issues.first(where: { $0.key == log.issueKey }) ?? JiraIssue(
+            id: log.issueKey, key: log.issueKey, summary: log.issueSummary
+        )
+        pendingTimerResult = TimerResult(
                 issue: issue,
                 startTime: log.startTime,
-                duration: log.duration
+                duration: log.duration,
+                worklogID: log.worklogID
             )
-        }
+        savePendingWorklog()
     }
 
     private var mainContent: some View {
@@ -224,9 +252,7 @@ struct ContentView: View {
                     }
 
                 Button("Refresh") {
-                    Task {
-                        await loadIssues(jql: customJQL.isEmpty ? nil : customJQL)
-                    }
+                    startIssueLoad(jql: customJQL.isEmpty ? nil : customJQL)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -238,9 +264,7 @@ struct ContentView: View {
                     ForEach(allTemplates, id: \.id) { template in
                         Button(action: {
                             customJQL = template.query
-                            Task {
-                                await loadIssues(jql: template.query)
-                            }
+                            startIssueLoad(jql: template.query)
                         }) {
                             Text(template.name)
                                 .font(.caption)
@@ -251,9 +275,7 @@ struct ContentView: View {
 
                     Button("Clear Query") {
                         customJQL = ""
-                        Task {
-                            await loadIssues()
-                        }
+                        startIssueLoad()
                     }
                 } label: {
                     HStack {
@@ -267,15 +289,11 @@ struct ContentView: View {
                 TextField("Custom JQL", text: $customJQL)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit {
-                        Task {
-                            await loadIssues(jql: customJQL)
-                        }
+                        startIssueLoad(jql: customJQL)
                     }
 
                 Button("Apply") {
-                    Task {
-                        await loadIssues(jql: customJQL)
-                    }
+                    startIssueLoad(jql: customJQL)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -310,9 +328,7 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
 
                     Button("Retry") {
-                        Task {
-                            await loadIssues()
-                        }
+                        startIssueLoad()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -341,17 +357,13 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
 
                         Button("All My Issues") {
-                            Task {
-                                await loadIssues(jql: "assignee = currentUser()")
-                            }
+                            startIssueLoad(jql: "assignee = currentUser()")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
 
                         Button("Recent Issues") {
-                            Task {
-                                await loadIssues(jql: "assignee = currentUser() ORDER BY updated DESC")
-                            }
+                            startIssueLoad(jql: "assignee = currentUser() ORDER BY updated DESC")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -367,9 +379,7 @@ struct ContentView: View {
                             isSelected: selectedIssue?.id == issue.id,
                             onSelect: { selectedIssue = issue },
                             onStatusChanged: {
-                                Task {
-                                    await loadIssues(jql: currentQuery.isEmpty ? nil : currentQuery)
-                                }
+                                startIssueLoad(jql: currentQuery.isEmpty ? nil : currentQuery)
                             }
                         )
                     }
@@ -410,6 +420,14 @@ struct ContentView: View {
         HStack {
             Spacer()
             Button("Quit JTimer") {
+                if timerManager.isRunning {
+                    let alert = NSAlert()
+                    alert.messageText = "A timer is still running"
+                    alert.informativeText = "JTimer will restore it next time you open the app."
+                    alert.addButton(withTitle: "Quit and Restore Later")
+                    alert.addButton(withTitle: "Cancel")
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                }
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.bordered)
@@ -445,9 +463,7 @@ struct ContentView: View {
     private func loadIssuesIfNeeded() {
         if jiraAPI.isAuthenticated {
             if issues.isEmpty {
-                Task {
-                    await loadIssues()
-                }
+                startIssueLoad()
             }
             Task {
                 await notificationManager.refresh()
@@ -478,10 +494,12 @@ struct ContentView: View {
         let queriesToTry = jql != nil ? [jql!] : fallbackQueries
 
         for (index, queryJQL) in queriesToTry.enumerated() {
+            guard !Task.isCancelled else { return }
             do {
                 print("🔍 JTimer: Trying JQL query: \(queryJQL)")
 
                 let fetchedIssues = try await jiraAPI.searchIssues(jql: queryJQL)
+                guard !Task.isCancelled else { return }
 
                 await MainActor.run {
                     issues = fetchedIssues
@@ -525,6 +543,11 @@ struct ContentView: View {
         }
     }
 
+    private func startIssueLoad(jql: String? = nil) {
+        issueLoadTask?.cancel()
+        issueLoadTask = Task { await loadIssues(jql: jql) }
+    }
+
     private func filterIssues() {
         if searchText.isEmpty {
             filteredIssues = issues
@@ -545,20 +568,29 @@ struct ContentView: View {
                 startTime: timerResult.startTime,
                 duration: timerResult.duration
             )
+            savePendingWorklog()
         }
     }
 
-    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval, comment: String? = nil, alsoAddAsComment: Bool = false) async {
+    private func logWorkToJira(issue: JiraIssue, worklogID: String?, startTime: Date, duration: TimeInterval, comment: String? = nil, alsoAddAsComment: Bool = false) async -> Bool {
+        guard duration >= 1 else {
+            worklogError = "Duration must be at least one second."
+            return false
+        }
+        isSubmittingWorklog = true
+        worklogError = nil
+        defer { isSubmittingWorklog = false }
         do {
             let timeInSeconds = Int(duration)
             print("⏱️ JTimer: Logging \(timeInSeconds) seconds (\(timeInSeconds/60) minutes) to \(issue.key)")
 
-            try await jiraAPI.logWork(
-                issueKey: issue.key,
-                timeSpentSeconds: timeInSeconds,
-                startTime: startTime,
-                comment: comment
-            )
+            if let worklogID {
+                try await jiraAPI.updateWorklog(issueKey: issue.key, worklogID: worklogID,
+                                                timeSpentSeconds: timeInSeconds, startTime: startTime, comment: comment)
+            } else {
+                try await jiraAPI.logWork(issueKey: issue.key, timeSpentSeconds: timeInSeconds,
+                                          startTime: startTime, comment: comment)
+            }
 
             print("✅ JTimer: Work logged successfully")
 
@@ -573,9 +605,35 @@ struct ContentView: View {
 
             // Refresh history from Jira
             loadLogHistory()
+            return true
         } catch {
             print("Failed to log work: \(error)")
+            worklogError = "Couldn’t save this worklog: \(error.localizedDescription). Your entry has been kept so you can retry."
+            return false
         }
+    }
+
+    private struct PendingWorklog: Codable {
+        let result: TimerResult
+        let description: String
+    }
+
+    private func savePendingWorklog() {
+        guard let pendingTimerResult,
+              let data = try? JSONEncoder().encode(PendingWorklog(result: pendingTimerResult, description: pendingDescription)) else { return }
+        UserDefaults.standard.set(data, forKey: pendingWorklogKey)
+    }
+
+    private func restorePendingWorklog() {
+        guard pendingTimerResult == nil,
+              let data = UserDefaults.standard.data(forKey: pendingWorklogKey),
+              let pending = try? JSONDecoder().decode(PendingWorklog.self, from: data) else { return }
+        pendingTimerResult = pending.result
+        pendingDescription = pending.description
+    }
+
+    private func clearPendingWorklog() {
+        UserDefaults.standard.removeObject(forKey: pendingWorklogKey)
     }
 
     private func loadCustomTemplates() {
@@ -603,19 +661,7 @@ struct IssueRowView: View {
     let onStatusChanged: () -> Void
 
     private var issueURL: URL? {
-        let settings = AppSettings()
-        let domain = settings.jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL: String
-
-        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            baseURL = "https://\(domain)"
-        } else if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
-            baseURL = domain
-        } else {
-            baseURL = "https://\(domain).atlassian.net"
-        }
-
-        return URL(string: "\(baseURL)/browse/\(issue.key)")
+        JiraURLBuilder.issueURL(domain: AppSettings().jiraDomain, issueKey: issue.key)
     }
 
     var body: some View {
@@ -777,6 +823,8 @@ private struct IssueStatusMenu: View {
 struct LogConfirmationView: View {
     let timerResult: TimerResult
     let jiraDomain: String
+    let isSubmitting: Bool
+    let errorMessage: String?
     let onConfirm: (TimeInterval, String, Bool) -> Void
     let onCancel: () -> Void
 
@@ -789,10 +837,14 @@ struct LogConfirmationView: View {
     init(timerResult: TimerResult,
          jiraDomain: String,
          initialDescription: String = "",
+         isSubmitting: Bool = false,
+         errorMessage: String? = nil,
          onConfirm: @escaping (TimeInterval, String, Bool) -> Void,
          onCancel: @escaping () -> Void) {
         self.timerResult = timerResult
         self.jiraDomain = jiraDomain
+        self.isSubmitting = isSubmitting
+        self.errorMessage = errorMessage
         self.onConfirm = onConfirm
         self.onCancel = onCancel
 
@@ -804,18 +856,7 @@ struct LogConfirmationView: View {
     }
 
     private var issueURL: URL? {
-        let domain = jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL: String
-
-        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            baseURL = "https://\(domain)"
-        } else if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
-            baseURL = domain
-        } else {
-            baseURL = "https://\(domain).atlassian.net"
-        }
-
-        return URL(string: "\(baseURL)/browse/\(timerResult.issue.key)")
+        JiraURLBuilder.issueURL(domain: jiraDomain, issueKey: timerResult.issue.key)
     }
 
     private var endTime: Date {
@@ -922,6 +963,16 @@ struct LogConfirmationView: View {
                     .background(Color.secondary.opacity(0.05))
                     .cornerRadius(6)
 
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(Color.red.opacity(0.08))
+                            .cornerRadius(6)
+                    }
+
                     // Duration editor
                     VStack(spacing: 8) {
                         Text("Adjust Duration")
@@ -1017,14 +1068,19 @@ struct LogConfirmationView: View {
                 }
                 .buttonStyle(.bordered)
                 .keyboardShortcut(.cancelAction)
+                .disabled(isSubmitting)
 
                 Spacer()
 
-                Button("Log Time") {
+                Button(timerResult.worklogID == nil ? "Log Time" : "Update Time") {
                     onConfirm(adjustedDuration, workDescription, alsoAddAsComment)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(isSubmitting || adjustedDuration < 1 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 || hours < 0)
+                .overlay {
+                    if isSubmitting { ProgressView().controlSize(.small) }
+                }
             }
             .padding()
         }

@@ -12,6 +12,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
+    private var spaceChangeObserver: NSObjectProtocol?
+    private var keyMonitor: Any?
 
     func setup(timerManager: TimerManager, jiraAPI: JiraAPI, notificationManager: NotificationManager) {
         guard statusItem == nil else { return }
@@ -81,12 +83,30 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         ) { [weak self] _ in
             Task { @MainActor in self?.closePopover() }
         }
+
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53, self?.popover?.isShown == true {
+                self?.closePopover()
+                return nil
+            }
+            return event
+        }
     }
 
     deinit {
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
         if let resignActiveObserver { NotificationCenter.default.removeObserver(resignActiveObserver) }
+        if let spaceChangeObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
     private func observeTimerChanges() {
@@ -282,6 +302,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private func closePopover() {
-        popover?.performClose(nil)
+        popover?.close()
     }
 }

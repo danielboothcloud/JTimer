@@ -14,6 +14,25 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let comments: [JiraComment]
     let changelog: JiraChangelog?
 
+    init(id: String, key: String, summary: String, status: String = "Unknown",
+         statusCategory: String? = nil, assignee: String? = nil,
+         issueType: String = "Issue", project: String = "",
+         updated: Date? = nil, created: Date? = nil,
+         comments: [JiraComment] = [], changelog: JiraChangelog? = nil) {
+        self.id = id
+        self.key = key
+        self.summary = summary
+        self.status = status
+        self.statusCategory = statusCategory
+        self.assignee = assignee
+        self.issueType = issueType
+        self.project = project
+        self.updated = updated
+        self.created = created
+        self.comments = comments
+        self.changelog = changelog
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, key, changelog
         case fields
@@ -54,11 +73,11 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         changelog = try container.decodeIfPresent(JiraChangelog.self, forKey: .changelog)
 
         let fields = try container.nestedContainer(keyedBy: FieldKeys.self, forKey: .fields)
-        summary = try fields.decode(String.self, forKey: .summary)
+        summary = try fields.decodeIfPresent(String.self, forKey: .summary) ?? "Untitled issue"
 
-        let statusContainer = try fields.nestedContainer(keyedBy: StatusKeys.self, forKey: .status)
-        status = try statusContainer.decode(String.self, forKey: .name)
-        if let categoryContainer = try? statusContainer.nestedContainer(
+        let statusContainer = try? fields.nestedContainer(keyedBy: StatusKeys.self, forKey: .status)
+        status = try statusContainer?.decodeIfPresent(String.self, forKey: .name) ?? "Unknown"
+        if let statusContainer, let categoryContainer = try? statusContainer.nestedContainer(
             keyedBy: StatusCategoryKeys.self,
             forKey: .statusCategory
         ) {
@@ -68,16 +87,16 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         }
 
         if let assigneeContainer = try? fields.nestedContainer(keyedBy: AssigneeKeys.self, forKey: .assignee) {
-            assignee = try assigneeContainer.decode(String.self, forKey: .displayName)
+            assignee = try assigneeContainer.decodeIfPresent(String.self, forKey: .displayName)
         } else {
             assignee = nil
         }
 
-        let issueTypeContainer = try fields.nestedContainer(keyedBy: IssueTypeKeys.self, forKey: .issuetype)
-        issueType = try issueTypeContainer.decode(String.self, forKey: .name)
+        let issueTypeContainer = try? fields.nestedContainer(keyedBy: IssueTypeKeys.self, forKey: .issuetype)
+        issueType = try issueTypeContainer?.decodeIfPresent(String.self, forKey: .name) ?? "Issue"
 
-        let projectContainer = try fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
-        project = try projectContainer.decode(String.self, forKey: .name)
+        let projectContainer = try? fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
+        project = try projectContainer?.decodeIfPresent(String.self, forKey: .name) ?? ""
 
         // Parse dates
         let dateFormatter = ISO8601DateFormatter()
@@ -97,7 +116,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
 
         // Parse comments
         if let commentContainer = try? fields.nestedContainer(keyedBy: CommentKeys.self, forKey: .comment) {
-            comments = try commentContainer.decode([JiraComment].self, forKey: .comments)
+            comments = (try? commentContainer.decodeIfPresent([JiraComment].self, forKey: .comments)) ?? []
         } else {
             comments = []
         }
@@ -107,6 +126,27 @@ struct JiraIssue: Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(key, forKey: .key)
+        try container.encodeIfPresent(changelog, forKey: .changelog)
+        var fields = container.nestedContainer(keyedBy: FieldKeys.self, forKey: .fields)
+        try fields.encode(summary, forKey: .summary)
+        var statusContainer = fields.nestedContainer(keyedBy: StatusKeys.self, forKey: .status)
+        try statusContainer.encode(status, forKey: .name)
+        if let statusCategory {
+            var category = statusContainer.nestedContainer(keyedBy: StatusCategoryKeys.self, forKey: .statusCategory)
+            try category.encode(statusCategory, forKey: .key)
+        }
+        if let assignee {
+            var value = fields.nestedContainer(keyedBy: AssigneeKeys.self, forKey: .assignee)
+            try value.encode(assignee, forKey: .displayName)
+        }
+        var type = fields.nestedContainer(keyedBy: IssueTypeKeys.self, forKey: .issuetype)
+        try type.encode(issueType, forKey: .name)
+        var projectValue = fields.nestedContainer(keyedBy: ProjectKeys.self, forKey: .project)
+        try projectValue.encode(project, forKey: .name)
+        try fields.encodeIfPresent(updated.map(JiraDate.format), forKey: .updated)
+        try fields.encodeIfPresent(created.map(JiraDate.format), forKey: .created)
+        var comment = fields.nestedContainer(keyedBy: CommentKeys.self, forKey: .comment)
+        try comment.encode(comments, forKey: .comments)
     }
 }
 
@@ -202,7 +242,8 @@ struct JiraNotificationEvent: Codable, Identifiable, Hashable {
 }
 
 struct TimeLogEntry: Codable, Identifiable {
-    let id: UUID
+    let id: String
+    let worklogID: String?
     let issueKey: String
     let issueSummary: String
     let duration: TimeInterval
@@ -210,8 +251,9 @@ struct TimeLogEntry: Codable, Identifiable {
     let loggedAt: Date
     var description: String
 
-    init(issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date = Date()) {
-        self.id = UUID()
+    init(worklogID: String? = nil, issueKey: String, issueSummary: String, duration: TimeInterval, startTime: Date, description: String, loggedAt: Date = Date()) {
+        self.worklogID = worklogID
+        self.id = worklogID ?? UUID().uuidString
         self.issueKey = issueKey
         self.issueSummary = issueSummary
         self.duration = duration
@@ -282,6 +324,50 @@ struct ADFText: Codable {
 enum TimerState {
     case idle
     case running(startTime: Date, issue: JiraIssue)
+}
+
+enum JiraDate {
+    static func parse(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    static func format(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+}
+
+enum JiraURLBuilder {
+    static func siteURL(from input: String) -> URL? {
+        var value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.hasSuffix("/") { value.removeLast() }
+        guard !value.isEmpty else { return nil }
+        if !value.contains("://") {
+            value = value.contains(".") ? "https://\(value)" : "https://\(value).atlassian.net"
+        }
+        guard var components = URLComponents(string: value),
+              components.scheme == "https", components.host != nil else { return nil }
+        guard components.path.isEmpty || components.path == "/" else { return nil }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
+    static func apiURL(domain: String, version: Int, path: String, queryItems: [URLQueryItem] = []) -> URL? {
+        guard let site = siteURL(from: domain), var components = URLComponents(url: site, resolvingAgainstBaseURL: false) else { return nil }
+        let suffix = path.hasPrefix("/") ? path : "/\(path)"
+        components.path = site.path + "/rest/api/\(version)" + suffix
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        return components.url
+    }
+
+    static func issueURL(domain: String, issueKey: String) -> URL? {
+        siteURL(from: domain)?.appendingPathComponent("browse").appendingPathComponent(issueKey)
+    }
 }
 
 struct AppSettings {

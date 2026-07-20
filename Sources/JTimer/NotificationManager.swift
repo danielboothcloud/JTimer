@@ -87,16 +87,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     func issueURL(for issueKey: String) -> URL? {
-        let domain = AppSettings().jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let root: String
-        if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
-            root = domain
-        } else if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            root = "https://\(domain)"
-        } else {
-            root = "https://\(domain).atlassian.net"
-        }
-        return URL(string: "\(root)/browse/\(issueKey)")
+        JiraURLBuilder.issueURL(domain: AppSettings().jiraDomain, issueKey: issueKey)
     }
 
     private func extractEvents(from issues: [JiraIssue], currentUser: JiraUser) -> [JiraNotificationEvent] {
@@ -140,9 +131,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     }
 
     private func parseJiraDate(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        JiraDate.parse(value)
     }
 
     private func requestNativeNotificationPermission() async {

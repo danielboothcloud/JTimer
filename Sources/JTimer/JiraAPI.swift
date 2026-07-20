@@ -35,21 +35,11 @@ final class JiraAPI: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    private var baseURL: String {
-        return baseURL(apiVersion: 3)
-    }
-
-    private func baseURL(apiVersion: Int) -> String {
-        let domain = settings.jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Handle full domain vs short domain
-        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            return "https://\(domain)/rest/api/\(apiVersion)"
-        } else if domain.hasPrefix("https://") {
-            return "\(domain)/rest/api/\(apiVersion)"
-        } else {
-            return "https://\(domain).atlassian.net/rest/api/\(apiVersion)"
+    private func apiURL(version: Int = 3, path: String, queryItems: [URLQueryItem] = []) throws -> URL {
+        guard let url = JiraURLBuilder.apiURL(domain: settings.jiraDomain, version: version, path: path, queryItems: queryItems) else {
+            throw JiraAPIError.invalidURL
         }
+        return url
     }
 
     private var authHeader: String? {
@@ -59,17 +49,15 @@ final class JiraAPI: ObservableObject {
         return "Basic \(credentialsData.base64EncodedString())"
     }
 
-    func configure(domain: String, email: String, token: String) {
+    @discardableResult
+    func configure(domain: String, email: String, token: String) async -> Bool {
         settings.jiraDomain = domain
         settings.jiraEmail = email
         keychain.saveToken(token)
 
         print("🔧 JTimer: Configuring with domain: '\(domain)', email: '\(email)'")
-        print("🔧 JTimer: Base URL will be: '\(baseURL)'")
-
-        Task {
-            await validateConnection()
-        }
+        await validateConnection()
+        return isAuthenticated
     }
 
     func validateConnection() async {
@@ -89,12 +77,8 @@ final class JiraAPI: ObservableObject {
             throw JiraAPIError.notAuthenticated
         }
 
-        let urlString = "\(baseURL)/myself"
-        print("🔍 JTimer: Attempting to connect to: \(urlString)")
-
-        guard let url = URL(string: urlString) else {
-            throw JiraAPIError.invalidURL
-        }
+        let url = try apiURL(path: "/myself")
+        print("🔍 JTimer: Attempting to connect to: \(url.absoluteString)")
 
         var request = URLRequest(url: url)
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -118,7 +102,7 @@ final class JiraAPI: ObservableObject {
                 throw JiraAPIError.serverError(httpResponse.statusCode)
             }
 
-            return try JSONDecoder().decode(JiraUser.self, from: data)
+            return try await Self.decode(JiraUser.self, from: data)
         } catch {
             print("🚨 JTimer: Network error: \(error)")
 
@@ -156,9 +140,7 @@ final class JiraAPI: ObservableObject {
         guard let authHeader = authHeader else {
             throw JiraAPIError.notAuthenticated
         }
-        guard let url = URL(string: "\(baseURL)/issue/\(issueKey)/transitions") else {
-            throw JiraAPIError.invalidURL
-        }
+        let url = try apiURL(path: "/issue/\(issueKey)/transitions")
 
         var request = URLRequest(url: url)
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -171,16 +153,14 @@ final class JiraAPI: ObservableObject {
         guard httpResponse.statusCode == 200 else {
             throw JiraAPIError.serverError(httpResponse.statusCode)
         }
-        return try JSONDecoder().decode(JiraTransitionResponse.self, from: data).transitions
+        return try await Self.decode(JiraTransitionResponse.self, from: data).transitions
     }
 
     func transitionIssue(issueKey: String, transitionID: String) async throws {
         guard let authHeader = authHeader else {
             throw JiraAPIError.notAuthenticated
         }
-        guard let url = URL(string: "\(baseURL)/issue/\(issueKey)/transitions") else {
-            throw JiraAPIError.invalidURL
-        }
+        let url = try apiURL(path: "/issue/\(issueKey)/transitions")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -204,17 +184,16 @@ final class JiraAPI: ObservableObject {
             throw JiraAPIError.notAuthenticated
         }
 
-        let encodedJQL = jql.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-
         // Use the new /search/jql endpoint for API v3, old /search for v2
         let endpoint = apiVersion >= 3 ? "/search/jql" : "/search"
-        let urlString = "\(baseURL(apiVersion: apiVersion))\(endpoint)?jql=\(encodedJQL)&fields=summary,status,assignee,issuetype,project,updated,created,comment&expand=changelog&maxResults=50"
+        let url = try apiURL(version: apiVersion, path: endpoint, queryItems: [
+            URLQueryItem(name: "jql", value: jql),
+            URLQueryItem(name: "fields", value: "summary,status,assignee,issuetype,project,updated,created,comment"),
+            URLQueryItem(name: "expand", value: "changelog"),
+            URLQueryItem(name: "maxResults", value: "50")
+        ])
 
-        print("🔍 JTimer: Search URL (API v\(apiVersion)): \(urlString)")
-
-        guard let url = URL(string: urlString) else {
-            throw JiraAPIError.invalidURL
-        }
+        print("🔍 JTimer: Search URL (API v\(apiVersion)): \(url.absoluteString)")
 
         var request = URLRequest(url: url)
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -230,11 +209,6 @@ final class JiraAPI: ObservableObject {
 
             print("📡 JTimer: Search HTTP Status (API v\(apiVersion)): \(httpResponse.statusCode)")
 
-            // Log response body for debugging
-            if let responseString = String(data: data, encoding: .utf8) {
-                print("📄 JTimer: Response: \(responseString.prefix(200))...")
-            }
-
             if httpResponse.statusCode == 400 {
                 throw JiraAPIError.invalidJQL
             }
@@ -248,14 +222,10 @@ final class JiraAPI: ObservableObject {
             }
 
             do {
-                let searchResponse = try JSONDecoder().decode(JiraSearchResponse.self, from: data)
+                let searchResponse = try await Self.decode(JiraSearchResponse.self, from: data)
                 return searchResponse.issues
             } catch let decodingError as DecodingError {
                 print("🚨 JTimer: JSON Decoding Error: \(decodingError)")
-                // Print a snippet of the JSON to help debug
-                if let responseString = String(data: data, encoding: .utf8) {
-                    print("📄 JTimer: JSON Context: \(responseString.prefix(1000))...")
-                }
                 throw decodingError
             }
         } catch {
@@ -269,7 +239,7 @@ final class JiraAPI: ObservableObject {
             throw JiraAPIError.notAuthenticated
         }
 
-        let url = URL(string: "\(baseURL)/issue/\(issueKey)/worklog")!
+        let url = try apiURL(path: "/issue/\(issueKey)/worklog")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -286,7 +256,7 @@ final class JiraAPI: ObservableObject {
         let jiraTimestamp = timestampWithoutTZ + "+0000"
 
         // Create ADF-formatted comment for Jira API v3
-        let commentText = comment?.isEmpty == false ? comment! : "Time tracked via JTimer"
+        let commentText = comment.flatMap { $0.isEmpty ? nil : $0 } ?? "Time tracked via JTimer"
         let commentADF = CommentADF(
             type: "doc",
             version: 1,
@@ -312,13 +282,7 @@ final class JiraAPI: ObservableObject {
         let encoder = JSONEncoder()
         request.httpBody = try encoder.encode(workLog)
 
-        // Debug logging
-        if let jsonString = String(data: request.httpBody!, encoding: .utf8) {
-            print("📤 JTimer: POST \(url)")
-            print("📤 JTimer: Request body: \(jsonString)")
-        }
-
-        let (data, response) = try await urlSession.data(for: request)
+        let (_, response) = try await urlSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw JiraAPIError.invalidResponse
@@ -326,13 +290,34 @@ final class JiraAPI: ObservableObject {
 
         print("📥 JTimer: Worklog response status: \(httpResponse.statusCode)")
 
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("📥 JTimer: Response body: \(responseString)")
-        }
-
         guard httpResponse.statusCode == 201 else {
             throw JiraAPIError.serverError(httpResponse.statusCode)
         }
+    }
+
+    func updateWorklog(issueKey: String, worklogID: String, timeSpentSeconds: Int, startTime: Date, comment: String?) async throws {
+        guard let authHeader else { throw JiraAPIError.notAuthenticated }
+        let url = try apiURL(path: "/issue/\(issueKey)/worklog/\(worklogID)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(makeWorklog(seconds: timeSpentSeconds, startTime: startTime, comment: comment))
+        let (_, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw JiraAPIError.invalidResponse }
+        guard httpResponse.statusCode == 200 else { throw JiraAPIError.serverError(httpResponse.statusCode) }
+    }
+
+    private func makeWorklog(seconds: Int, startTime: Date, comment: String?) -> WorkLogEntry {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let text = comment.flatMap { $0.isEmpty ? nil : $0 } ?? "Time tracked via JTimer"
+        return WorkLogEntry(timeSpentSeconds: seconds, comment: CommentADF(
+            type: "doc", version: 1,
+            content: [ADFContent(type: "paragraph", content: [ADFText(type: "text", text: text)])]
+        ), started: formatter.string(from: startTime) + "+0000")
     }
 
     func fetchNotificationCandidates(days: Int = 7) async throws -> [JiraIssue] {
@@ -360,7 +345,7 @@ final class JiraAPI: ObservableObject {
 
         // Fetch worklogs for each issue
         for issue in issues.prefix(20) { // Limit to 20 most recent issues
-            let url = URL(string: "\(baseURL)/issue/\(issue.key)/worklog")!
+            let url = try apiURL(path: "/issue/\(issue.key)/worklog")
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -373,7 +358,7 @@ final class JiraAPI: ObservableObject {
             }
 
             if httpResponse.statusCode == 200 {
-                let worklogResponse = try JSONDecoder().decode(WorklogResponse.self, from: data)
+                let worklogResponse = try await Self.decode(WorklogResponse.self, from: data)
 
                 // Filter worklogs by current user and convert to TimeLogEntry
                 for worklog in worklogResponse.worklogs {
@@ -405,6 +390,7 @@ final class JiraAPI: ObservableObject {
                         }
 
                         let entry = TimeLogEntry(
+                            worklogID: worklog.id,
                             issueKey: issue.key,
                             issueSummary: issue.summary,
                             duration: TimeInterval(worklog.timeSpentSeconds),
@@ -427,7 +413,7 @@ final class JiraAPI: ObservableObject {
             throw JiraAPIError.notAuthenticated
         }
 
-        let url = URL(string: "\(baseURL)/issue/\(issueKey)/comment")!
+        let url = try apiURL(path: "/issue/\(issueKey)/comment")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -457,12 +443,7 @@ final class JiraAPI: ObservableObject {
         let encoder = JSONEncoder()
         request.httpBody = try encoder.encode(requestBody)
 
-        print("📤 JTimer: POST \(url)")
-        if let jsonString = String(data: request.httpBody!, encoding: .utf8) {
-            print("📤 JTimer: Request body: \(jsonString)")
-        }
-
-        let (data, response) = try await urlSession.data(for: request)
+        let (_, response) = try await urlSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw JiraAPIError.invalidResponse
@@ -473,11 +454,14 @@ final class JiraAPI: ObservableObject {
         if httpResponse.statusCode == 201 {
             print("✅ JTimer: Comment added successfully")
         } else {
-            if let responseString = String(data: data, encoding: .utf8) {
-                print("📥 JTimer: Response body: \(responseString)")
-            }
             throw JiraAPIError.serverError(httpResponse.statusCode)
         }
+    }
+
+    private nonisolated static func decode<T: Decodable>(_ type: T.Type, from data: Data) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(type, from: data)
+        }.value
     }
 }
 
