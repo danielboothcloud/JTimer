@@ -152,6 +152,53 @@ final class JiraAPI: ObservableObject {
         }
     }
 
+    func getTransitions(issueKey: String) async throws -> [JiraTransition] {
+        guard let authHeader = authHeader else {
+            throw JiraAPIError.notAuthenticated
+        }
+        guard let url = URL(string: "\(baseURL)/issue/\(issueKey)/transitions") else {
+            throw JiraAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw JiraAPIError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw JiraAPIError.serverError(httpResponse.statusCode)
+        }
+        return try JSONDecoder().decode(JiraTransitionResponse.self, from: data).transitions
+    }
+
+    func transitionIssue(issueKey: String, transitionID: String) async throws {
+        guard let authHeader = authHeader else {
+            throw JiraAPIError.notAuthenticated
+        }
+        guard let url = URL(string: "\(baseURL)/issue/\(issueKey)/transitions") else {
+            throw JiraAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "transition": ["id": transitionID]
+        ])
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw JiraAPIError.invalidResponse
+        }
+        guard httpResponse.statusCode == 204 else {
+            throw JiraAPIError.serverError(httpResponse.statusCode)
+        }
+    }
+
     private func searchIssues(jql: String, apiVersion: Int) async throws -> [JiraIssue] {
         guard let authHeader = authHeader else {
             throw JiraAPIError.notAuthenticated

@@ -5,6 +5,7 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     let key: String
     let summary: String
     let status: String
+    let statusCategory: String?
     let assignee: String?
     let issueType: String
     let project: String
@@ -27,7 +28,11 @@ struct JiraIssue: Codable, Identifiable, Hashable {
     }
 
     enum StatusKeys: String, CodingKey {
-        case name
+        case name, statusCategory
+    }
+
+    enum StatusCategoryKeys: String, CodingKey {
+        case key
     }
 
     enum AssigneeKeys: String, CodingKey {
@@ -53,6 +58,14 @@ struct JiraIssue: Codable, Identifiable, Hashable {
 
         let statusContainer = try fields.nestedContainer(keyedBy: StatusKeys.self, forKey: .status)
         status = try statusContainer.decode(String.self, forKey: .name)
+        if let categoryContainer = try? statusContainer.nestedContainer(
+            keyedBy: StatusCategoryKeys.self,
+            forKey: .statusCategory
+        ) {
+            statusCategory = try categoryContainer.decodeIfPresent(String.self, forKey: .key)
+        } else {
+            statusCategory = nil
+        }
 
         if let assigneeContainer = try? fields.nestedContainer(keyedBy: AssigneeKeys.self, forKey: .assignee) {
             assignee = try assigneeContainer.decode(String.self, forKey: .displayName)
@@ -222,6 +235,21 @@ struct JiraSearchResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case issues, total
     }
+}
+
+struct JiraTransitionResponse: Codable {
+    let transitions: [JiraTransition]
+}
+
+struct JiraTransition: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let to: JiraTransitionStatus
+}
+
+struct JiraTransitionStatus: Codable, Hashable {
+    let id: String
+    let name: String
 }
 
 struct WorkLogEntry: Codable {

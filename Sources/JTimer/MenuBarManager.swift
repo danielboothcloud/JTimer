@@ -9,6 +9,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var timerManager: TimerManager?
     private var jiraAPI: JiraAPI?
     private var notificationManager: NotificationManager?
+    private var localClickMonitor: Any?
+    private var globalClickMonitor: Any?
+    private var resignActiveObserver: NSObjectProtocol?
 
     func setup(timerManager: TimerManager, jiraAPI: JiraAPI, notificationManager: NotificationManager) {
         guard statusItem == nil else { return }
@@ -29,6 +32,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         }
 
         setupPopover()
+        setupDismissalHandling()
         observeTimerChanges()
         observeNotificationChanges()
     }
@@ -52,6 +56,37 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         // Keep the hosting controller and all SwiftUI presentation state alive.
         // Reopening the menu-bar popover restores the exact sheet and draft that
         // was visible before the user clicked elsewhere.
+    }
+
+    private func setupDismissalHandling() {
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.popover?.isShown == true else { return event }
+            let popoverWindow = self.popover?.contentViewController?.view.window
+            let statusWindow = self.statusItem?.button?.window
+            let isMenuWindow = event.window.map { String(describing: type(of: $0)).localizedCaseInsensitiveContains("menu") } ?? false
+            if event.window !== popoverWindow && event.window !== statusWindow && !isMenuWindow {
+                self.closePopover()
+            }
+            return event
+        }
+
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+    }
+
+    deinit {
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
+        if let resignActiveObserver { NotificationCenter.default.removeObserver(resignActiveObserver) }
     }
 
     private func observeTimerChanges() {

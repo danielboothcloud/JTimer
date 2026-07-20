@@ -365,7 +365,12 @@ struct ContentView: View {
                         IssueRowView(
                             issue: issue,
                             isSelected: selectedIssue?.id == issue.id,
-                            onSelect: { selectedIssue = issue }
+                            onSelect: { selectedIssue = issue },
+                            onStatusChanged: {
+                                Task {
+                                    await loadIssues(jql: currentQuery.isEmpty ? nil : currentQuery)
+                                }
+                            }
                         )
                     }
                 }
@@ -595,6 +600,7 @@ struct IssueRowView: View {
     let issue: JiraIssue
     let isSelected: Bool
     let onSelect: () -> Void
+    let onStatusChanged: () -> Void
 
     private var issueURL: URL? {
         let settings = AppSettings()
@@ -613,8 +619,7 @@ struct IssueRowView: View {
     }
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack {
+        HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text(issue.key)
@@ -650,12 +655,8 @@ struct IssueRowView: View {
                         .foregroundColor(.primary)
 
                     HStack {
-                        Text(issue.status)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
+                        IssueStatusMenu(issue: issue, onStatusChanged: onStatusChanged)
                         Spacer()
-
                         if let assignee = issue.assignee {
                             Text(assignee)
                                 .font(.caption2)
@@ -672,8 +673,8 @@ struct IssueRowView: View {
                 }
             }
             .padding(8)
-        }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Color.blue.opacity(0.1) : Color.clear)
@@ -683,6 +684,94 @@ struct IssueRowView: View {
                 .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1)
         )
     }
+}
+
+private struct IssueStatusMenu: View {
+    @EnvironmentObject var jiraAPI: JiraAPI
+    let issue: JiraIssue
+    let onStatusChanged: () -> Void
+
+    @State private var transitions: [JiraTransition] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Menu {
+            if isLoading {
+                Text("Loading available statuses…")
+            } else if let errorMessage {
+                Text(errorMessage)
+                Button("Retry") { loadTransitions() }
+            } else if transitions.isEmpty {
+                Text("No workflow transitions available")
+                Button("Reload") { loadTransitions() }
+            } else {
+                ForEach(transitions) { transition in
+                    Button(transition.to.name) {
+                        apply(transition)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(issue.status).fontWeight(.medium)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .font(.caption2)
+            .foregroundColor(statusColor)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(statusColor.opacity(0.16))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(statusColor.opacity(0.40), lineWidth: 1))
+        .onAppear {
+            if transitions.isEmpty { loadTransitions() }
+        }
+        .help("Change status for \(issue.key)")
+    }
+
+    private func loadTransitions() {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                transitions = try await jiraAPI.getTransitions(issueKey: issue.key)
+            } catch {
+                errorMessage = "Couldn’t load statuses"
+            }
+            isLoading = false
+        }
+    }
+
+    private func apply(_ transition: JiraTransition) {
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                try await jiraAPI.transitionIssue(issueKey: issue.key, transitionID: transition.id)
+                transitions = []
+                onStatusChanged()
+            } catch {
+                errorMessage = "Status change failed"
+            }
+            isLoading = false
+        }
+    }
+
+    private var statusColor: Color {
+        switch issue.statusCategory?.lowercased() {
+        case "done": return .green
+        case "indeterminate": return .blue
+        case "new": return .purple
+        default: return .orange
+        }
+    }
+
 }
 
 struct LogConfirmationView: View {
