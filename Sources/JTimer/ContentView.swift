@@ -1,18 +1,27 @@
 import SwiftUI
 import AppKit
 
-struct TimerResult: Identifiable {
-    let id = UUID()
+struct TimerResult: Identifiable, Codable {
+    let id: UUID
     let issue: JiraIssue
     let startTime: Date
     let duration: TimeInterval
+    let worklogID: String?
+
+    init(id: UUID = UUID(), issue: JiraIssue, startTime: Date, duration: TimeInterval, worklogID: String? = nil) {
+        self.id = id
+        self.issue = issue
+        self.startTime = startTime
+        self.duration = duration
+        self.worklogID = worklogID
+    }
 }
 
 struct VisualEffectView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
+        view.material = .popover
+        view.blendingMode = .withinWindow
         view.state = .active
         return view
     }
@@ -23,6 +32,7 @@ struct VisualEffectView: NSViewRepresentable {
 struct ContentView: View {
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var jiraAPI: JiraAPI
+    @EnvironmentObject var notificationManager: NotificationManager
     @State private var issues: [JiraIssue] = []
     @State private var filteredIssues: [JiraIssue] = []
     @State private var searchText = ""
@@ -38,58 +48,84 @@ struct ContentView: View {
     @State private var pendingDescription: String = ""
     @State private var timeLogHistory: [TimeLogEntry] = []
     @State private var showingUpdates = false
-    @State private var recentUpdates: [JiraIssue] = []
     @State private var customJQLTemplates: [JQLTemplate] = []
+    @State private var isSubmittingWorklog = false
+    @State private var worklogError: String?
+    @State private var issueLoadTask: Task<Void, Never>?
+    private let pendingWorklogKey = "JTimer.pendingWorklog.v1"
 
     var allTemplates: [JQLTemplate] {
         JQLTemplate.commonTemplates + customJQLTemplates
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerView
-            Divider()
-
-            if jiraAPI.isAuthenticated {
-                mainContent
+        Group {
+            if let result = pendingTimerResult {
+                LogConfirmationView(
+                    timerResult: result,
+                    jiraDomain: AppSettings().jiraDomain,
+                    initialDescription: pendingDescription,
+                    isSubmitting: isSubmittingWorklog,
+                    errorMessage: worklogError,
+                    onConfirm: { adjustedDuration, description, alsoAddAsComment in
+                        Task {
+                            let succeeded = await logWorkToJira(
+                                issue: result.issue,
+                                worklogID: result.worklogID,
+                                startTime: result.startTime,
+                                duration: adjustedDuration,
+                                comment: description,
+                                alsoAddAsComment: alsoAddAsComment
+                            )
+                            if succeeded {
+                                pendingTimerResult = nil
+                                pendingDescription = ""
+                                clearPendingWorklog()
+                            }
+                        }
+                    },
+                    onCancel: {
+                        pendingTimerResult = nil
+                        pendingDescription = ""
+                        clearPendingWorklog()
+                    }
+                )
+            } else if showingUpdates {
+                UpdatesView(notificationManager: notificationManager) {
+                    showingUpdates = false
+                }
+            } else if showingHistory {
+                LogHistoryView(
+                    logs: $timeLogHistory,
+                    onEditLog: editLog,
+                    onClose: { showingHistory = false }
+                )
+            } else if showingSettings {
+                SettingsView(onClose: { showingSettings = false })
+                    .environmentObject(jiraAPI)
             } else {
-                authenticationPrompt
+                VStack(spacing: 0) {
+                    headerView
+                    Divider()
+
+                    if jiraAPI.isAuthenticated {
+                        mainContent
+                    } else {
+                        authenticationPrompt
+                    }
+                }
+                .frame(width: 400, height: 500)
             }
         }
-        .frame(width: 400, height: 500)
         .onAppear {
             loadIssuesIfNeeded()
             loadLogHistory()
             loadCustomTemplates()
+            restorePendingWorklog()
         }
-        .sheet(item: $pendingTimerResult) { result in
-            LogConfirmationView(
-                timerResult: result,
-                jiraDomain: AppSettings().jiraDomain,
-                initialDescription: pendingDescription,
-                onConfirm: { adjustedDuration, description, alsoAddAsComment in
-                    Task {
-                        await logWorkToJira(
-                            issue: result.issue,
-                            startTime: result.startTime,
-                            duration: adjustedDuration,
-                            comment: description,
-                            alsoAddAsComment: alsoAddAsComment
-                        )
-                    }
-                    pendingTimerResult = nil
-                    pendingDescription = ""
-                },
-                onCancel: {
-                    pendingTimerResult = nil
-                    pendingDescription = ""
-                }
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("PopoverWillClose"))) { _ in
-            showingUpdates = false
-            showingHistory = false
-            showingSettings = false
+        .onDisappear { issueLoadTask?.cancel() }
+        .onChange(of: jiraAPI.isAuthenticated) { authenticated in
+            if authenticated { startIssueLoad() }
         }
     }
 
@@ -114,8 +150,22 @@ struct ContentView: View {
                 }
             }
 
-            Button(action: { showingUpdates = true }) {
-                Image(systemName: "bell")
+            Button(action: {
+                showingUpdates = true
+                Task { await notificationManager.refresh() }
+            }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: notificationManager.unreadCount > 0 ? "bell.fill" : "bell")
+                    if notificationManager.unreadCount > 0 {
+                        Text("\(min(notificationManager.unreadCount, 99))")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(2)
+                            .background(Color.red)
+                            .clipShape(Circle())
+                            .offset(x: 7, y: -7)
+                    }
+                }
             }
             .buttonStyle(.borderless)
             .help("View recent updates")
@@ -133,41 +183,21 @@ struct ContentView: View {
             .help("Settings")
         }
         .padding()
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
-                .environmentObject(jiraAPI)
-        }
-        .sheet(isPresented: $showingHistory) {
-            LogHistoryView(
-                logs: $timeLogHistory,
-                onEditLog: { log in
-                    showingHistory = false
-                    pendingDescription = log.description
-                    // Create a timer result from the log entry
-                    if let issue = issues.first(where: { $0.key == log.issueKey }) {
-                        pendingTimerResult = TimerResult(
-                            issue: issue,
-                            startTime: log.startTime,
-                            duration: log.duration
-                        )
-                    }
-                }
+    }
+
+    private func editLog(_ log: TimeLogEntry) {
+        showingHistory = false
+        pendingDescription = log.description
+        let issue = issues.first(where: { $0.key == log.issueKey }) ?? JiraIssue(
+            id: log.issueKey, key: log.issueKey, summary: log.issueSummary
+        )
+        pendingTimerResult = TimerResult(
+                issue: issue,
+                startTime: log.startTime,
+                duration: log.duration,
+                worklogID: log.worklogID
             )
-        }
-        .sheet(isPresented: $showingUpdates) {
-            UpdatesView(
-                issues: $recentUpdates,
-                currentUser: jiraAPI.currentUser,
-                onSelect: { issue in
-                    showingUpdates = false
-                    // Add to issues list if not present so we can select it
-                    if !issues.contains(where: { $0.key == issue.key }) {
-                        issues.insert(issue, at: 0)
-                    }
-                    selectedIssue = issue
-                }
-            )
-        }
+        savePendingWorklog()
     }
 
     private var mainContent: some View {
@@ -222,9 +252,7 @@ struct ContentView: View {
                     }
 
                 Button("Refresh") {
-                    Task {
-                        await loadIssues(jql: customJQL.isEmpty ? nil : customJQL)
-                    }
+                    startIssueLoad(jql: customJQL.isEmpty ? nil : customJQL)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -236,9 +264,7 @@ struct ContentView: View {
                     ForEach(allTemplates, id: \.id) { template in
                         Button(action: {
                             customJQL = template.query
-                            Task {
-                                await loadIssues(jql: template.query)
-                            }
+                            startIssueLoad(jql: template.query)
                         }) {
                             Text(template.name)
                                 .font(.caption)
@@ -249,9 +275,7 @@ struct ContentView: View {
 
                     Button("Clear Query") {
                         customJQL = ""
-                        Task {
-                            await loadIssues()
-                        }
+                        startIssueLoad()
                     }
                 } label: {
                     HStack {
@@ -265,15 +289,11 @@ struct ContentView: View {
                 TextField("Custom JQL", text: $customJQL)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit {
-                        Task {
-                            await loadIssues(jql: customJQL)
-                        }
+                        startIssueLoad(jql: customJQL)
                     }
 
                 Button("Apply") {
-                    Task {
-                        await loadIssues(jql: customJQL)
-                    }
+                    startIssueLoad(jql: customJQL)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -308,9 +328,7 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
 
                     Button("Retry") {
-                        Task {
-                            await loadIssues()
-                        }
+                        startIssueLoad()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -339,17 +357,13 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
 
                         Button("All My Issues") {
-                            Task {
-                                await loadIssues(jql: "assignee = currentUser()")
-                            }
+                            startIssueLoad(jql: "assignee = currentUser()")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
 
                         Button("Recent Issues") {
-                            Task {
-                                await loadIssues(jql: "assignee = currentUser() ORDER BY updated DESC")
-                            }
+                            startIssueLoad(jql: "assignee = currentUser() ORDER BY updated DESC")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -363,7 +377,10 @@ struct ContentView: View {
                         IssueRowView(
                             issue: issue,
                             isSelected: selectedIssue?.id == issue.id,
-                            onSelect: { selectedIssue = issue }
+                            onSelect: { selectedIssue = issue },
+                            onStatusChanged: {
+                                startIssueLoad(jql: currentQuery.isEmpty ? nil : currentQuery)
+                            }
                         )
                     }
                 }
@@ -403,6 +420,14 @@ struct ContentView: View {
         HStack {
             Spacer()
             Button("Quit JTimer") {
+                if timerManager.isRunning {
+                    let alert = NSAlert()
+                    alert.messageText = "A timer is still running"
+                    alert.informativeText = "JTimer will restore it next time you open the app."
+                    alert.addButton(withTitle: "Quit and Restore Later")
+                    alert.addButton(withTitle: "Cancel")
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                }
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.bordered)
@@ -438,24 +463,11 @@ struct ContentView: View {
     private func loadIssuesIfNeeded() {
         if jiraAPI.isAuthenticated {
             if issues.isEmpty {
-                Task {
-                    await loadIssues()
-                }
+                startIssueLoad()
             }
             Task {
-                await loadRecentUpdates()
+                await notificationManager.refresh()
             }
-        }
-    }
-
-    private func loadRecentUpdates() async {
-        do {
-            let updates = try await jiraAPI.fetchUpdates()
-            await MainActor.run {
-                recentUpdates = updates
-            }
-        } catch {
-            print("Failed to load updates: \(error)")
         }
     }
 
@@ -482,10 +494,12 @@ struct ContentView: View {
         let queriesToTry = jql != nil ? [jql!] : fallbackQueries
 
         for (index, queryJQL) in queriesToTry.enumerated() {
+            guard !Task.isCancelled else { return }
             do {
                 print("🔍 JTimer: Trying JQL query: \(queryJQL)")
 
                 let fetchedIssues = try await jiraAPI.searchIssues(jql: queryJQL)
+                guard !Task.isCancelled else { return }
 
                 await MainActor.run {
                     issues = fetchedIssues
@@ -529,6 +543,11 @@ struct ContentView: View {
         }
     }
 
+    private func startIssueLoad(jql: String? = nil) {
+        issueLoadTask?.cancel()
+        issueLoadTask = Task { await loadIssues(jql: jql) }
+    }
+
     private func filterIssues() {
         if searchText.isEmpty {
             filteredIssues = issues
@@ -549,20 +568,29 @@ struct ContentView: View {
                 startTime: timerResult.startTime,
                 duration: timerResult.duration
             )
+            savePendingWorklog()
         }
     }
 
-    private func logWorkToJira(issue: JiraIssue, startTime: Date, duration: TimeInterval, comment: String? = nil, alsoAddAsComment: Bool = false) async {
+    private func logWorkToJira(issue: JiraIssue, worklogID: String?, startTime: Date, duration: TimeInterval, comment: String? = nil, alsoAddAsComment: Bool = false) async -> Bool {
+        guard duration >= 1 else {
+            worklogError = "Duration must be at least one second."
+            return false
+        }
+        isSubmittingWorklog = true
+        worklogError = nil
+        defer { isSubmittingWorklog = false }
         do {
             let timeInSeconds = Int(duration)
             print("⏱️ JTimer: Logging \(timeInSeconds) seconds (\(timeInSeconds/60) minutes) to \(issue.key)")
 
-            try await jiraAPI.logWork(
-                issueKey: issue.key,
-                timeSpentSeconds: timeInSeconds,
-                startTime: startTime,
-                comment: comment
-            )
+            if let worklogID {
+                try await jiraAPI.updateWorklog(issueKey: issue.key, worklogID: worklogID,
+                                                timeSpentSeconds: timeInSeconds, startTime: startTime, comment: comment)
+            } else {
+                try await jiraAPI.logWork(issueKey: issue.key, timeSpentSeconds: timeInSeconds,
+                                          startTime: startTime, comment: comment)
+            }
 
             print("✅ JTimer: Work logged successfully")
 
@@ -577,9 +605,35 @@ struct ContentView: View {
 
             // Refresh history from Jira
             loadLogHistory()
+            return true
         } catch {
             print("Failed to log work: \(error)")
+            worklogError = "Couldn’t save this worklog: \(error.localizedDescription). Your entry has been kept so you can retry."
+            return false
         }
+    }
+
+    private struct PendingWorklog: Codable {
+        let result: TimerResult
+        let description: String
+    }
+
+    private func savePendingWorklog() {
+        guard let pendingTimerResult,
+              let data = try? JSONEncoder().encode(PendingWorklog(result: pendingTimerResult, description: pendingDescription)) else { return }
+        UserDefaults.standard.set(data, forKey: pendingWorklogKey)
+    }
+
+    private func restorePendingWorklog() {
+        guard pendingTimerResult == nil,
+              let data = UserDefaults.standard.data(forKey: pendingWorklogKey),
+              let pending = try? JSONDecoder().decode(PendingWorklog.self, from: data) else { return }
+        pendingTimerResult = pending.result
+        pendingDescription = pending.description
+    }
+
+    private func clearPendingWorklog() {
+        UserDefaults.standard.removeObject(forKey: pendingWorklogKey)
     }
 
     private func loadCustomTemplates() {
@@ -604,26 +658,14 @@ struct IssueRowView: View {
     let issue: JiraIssue
     let isSelected: Bool
     let onSelect: () -> Void
+    let onStatusChanged: () -> Void
 
     private var issueURL: URL? {
-        let settings = AppSettings()
-        let domain = settings.jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL: String
-
-        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            baseURL = "https://\(domain)"
-        } else if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
-            baseURL = domain
-        } else {
-            baseURL = "https://\(domain).atlassian.net"
-        }
-
-        return URL(string: "\(baseURL)/browse/\(issue.key)")
+        JiraURLBuilder.issueURL(domain: AppSettings().jiraDomain, issueKey: issue.key)
     }
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack {
+        HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text(issue.key)
@@ -659,12 +701,8 @@ struct IssueRowView: View {
                         .foregroundColor(.primary)
 
                     HStack {
-                        Text(issue.status)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-
+                        IssueStatusMenu(issue: issue, onStatusChanged: onStatusChanged)
                         Spacer()
-
                         if let assignee = issue.assignee {
                             Text(assignee)
                                 .font(.caption2)
@@ -681,8 +719,8 @@ struct IssueRowView: View {
                 }
             }
             .padding(8)
-        }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Color.blue.opacity(0.1) : Color.clear)
@@ -694,9 +732,99 @@ struct IssueRowView: View {
     }
 }
 
+private struct IssueStatusMenu: View {
+    @EnvironmentObject var jiraAPI: JiraAPI
+    let issue: JiraIssue
+    let onStatusChanged: () -> Void
+
+    @State private var transitions: [JiraTransition] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Menu {
+            if isLoading {
+                Text("Loading available statuses…")
+            } else if let errorMessage {
+                Text(errorMessage)
+                Button("Retry") { loadTransitions() }
+            } else if transitions.isEmpty {
+                Text("No workflow transitions available")
+                Button("Reload") { loadTransitions() }
+            } else {
+                ForEach(transitions) { transition in
+                    Button(transition.to.name) {
+                        apply(transition)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(issue.status).fontWeight(.medium)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .font(.caption2)
+            .foregroundColor(statusColor)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(statusColor.opacity(0.16))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(statusColor.opacity(0.40), lineWidth: 1))
+        .onAppear {
+            if transitions.isEmpty { loadTransitions() }
+        }
+        .help("Change status for \(issue.key)")
+    }
+
+    private func loadTransitions() {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                transitions = try await jiraAPI.getTransitions(issueKey: issue.key)
+            } catch {
+                errorMessage = "Couldn’t load statuses"
+            }
+            isLoading = false
+        }
+    }
+
+    private func apply(_ transition: JiraTransition) {
+        isLoading = true
+        errorMessage = nil
+        Task {
+            do {
+                try await jiraAPI.transitionIssue(issueKey: issue.key, transitionID: transition.id)
+                transitions = []
+                onStatusChanged()
+            } catch {
+                errorMessage = "Status change failed"
+            }
+            isLoading = false
+        }
+    }
+
+    private var statusColor: Color {
+        switch issue.statusCategory?.lowercased() {
+        case "done": return .green
+        case "indeterminate": return .blue
+        case "new": return .purple
+        default: return .orange
+        }
+    }
+
+}
+
 struct LogConfirmationView: View {
     let timerResult: TimerResult
     let jiraDomain: String
+    let isSubmitting: Bool
+    let errorMessage: String?
     let onConfirm: (TimeInterval, String, Bool) -> Void
     let onCancel: () -> Void
 
@@ -709,10 +837,14 @@ struct LogConfirmationView: View {
     init(timerResult: TimerResult,
          jiraDomain: String,
          initialDescription: String = "",
+         isSubmitting: Bool = false,
+         errorMessage: String? = nil,
          onConfirm: @escaping (TimeInterval, String, Bool) -> Void,
          onCancel: @escaping () -> Void) {
         self.timerResult = timerResult
         self.jiraDomain = jiraDomain
+        self.isSubmitting = isSubmitting
+        self.errorMessage = errorMessage
         self.onConfirm = onConfirm
         self.onCancel = onCancel
 
@@ -724,18 +856,7 @@ struct LogConfirmationView: View {
     }
 
     private var issueURL: URL? {
-        let domain = jiraDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL: String
-
-        if domain.contains("atlassian.net") || domain.contains("atlassian.com") {
-            baseURL = "https://\(domain)"
-        } else if domain.hasPrefix("https://") || domain.hasPrefix("http://") {
-            baseURL = domain
-        } else {
-            baseURL = "https://\(domain).atlassian.net"
-        }
-
-        return URL(string: "\(baseURL)/browse/\(timerResult.issue.key)")
+        JiraURLBuilder.issueURL(domain: jiraDomain, issueKey: timerResult.issue.key)
     }
 
     private var endTime: Date {
@@ -842,6 +963,16 @@ struct LogConfirmationView: View {
                     .background(Color.secondary.opacity(0.05))
                     .cornerRadius(6)
 
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(Color.red.opacity(0.08))
+                            .cornerRadius(6)
+                    }
+
                     // Duration editor
                     VStack(spacing: 8) {
                         Text("Adjust Duration")
@@ -937,14 +1068,19 @@ struct LogConfirmationView: View {
                 }
                 .buttonStyle(.bordered)
                 .keyboardShortcut(.cancelAction)
+                .disabled(isSubmitting)
 
                 Spacer()
 
-                Button("Log Time") {
+                Button(timerResult.worklogID == nil ? "Log Time" : "Update Time") {
                     onConfirm(adjustedDuration, workDescription, alsoAddAsComment)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(isSubmitting || adjustedDuration < 1 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 || hours < 0)
+                .overlay {
+                    if isSubmitting { ProgressView().controlSize(.small) }
+                }
             }
             .padding()
         }
@@ -964,7 +1100,7 @@ struct LogConfirmationView: View {
 struct LogHistoryView: View {
     @Binding var logs: [TimeLogEntry]
     let onEditLog: (TimeLogEntry) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -974,7 +1110,7 @@ struct LogHistoryView: View {
                     .font(.headline)
                 Spacer()
                 Button("Done") {
-                    dismiss()
+                    onClose()
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -1008,7 +1144,7 @@ struct LogHistoryView: View {
                 }
             }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 400, height: 500)
         .background(VisualEffectView())
     }
 }

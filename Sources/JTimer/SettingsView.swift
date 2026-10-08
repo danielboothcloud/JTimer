@@ -4,6 +4,7 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject var jiraAPI: JiraAPI
     @Environment(\.dismiss) private var dismiss
+    var onClose: (() -> Void)? = nil
 
     @State private var jiraDomain = ""
     @State private var jiraEmail = ""
@@ -255,7 +256,7 @@ struct SettingsView: View {
             // Footer buttons
             HStack(spacing: 12) {
                 Button("Cancel") {
-                    dismiss()
+                    if let onClose { onClose() } else { dismiss() }
                 }
                 .buttonStyle(.bordered)
 
@@ -319,17 +320,14 @@ struct SettingsView: View {
         isValidating = true
         validationMessage = "Validating connection..."
 
-        jiraAPI.configure(domain: jiraDomain, email: jiraEmail, token: jiraToken)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        Task {
+            let succeeded = await jiraAPI.configure(domain: jiraDomain, email: jiraEmail, token: jiraToken)
             isValidating = false
-            if jiraAPI.isAuthenticated {
+            if succeeded {
                 validationMessage = "Connection successful!"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    dismiss()
-                }
+                if let onClose { onClose() } else { dismiss() }
             } else {
-                validationMessage = "Connection failed. Please check your credentials."
+                validationMessage = jiraAPI.lastError ?? "Connection failed. Please check your credentials."
             }
         }
     }

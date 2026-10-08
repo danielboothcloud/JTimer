@@ -8,12 +8,19 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     private var popover: NSPopover?
     private var timerManager: TimerManager?
     private var jiraAPI: JiraAPI?
+    private var notificationManager: NotificationManager?
+    private var localClickMonitor: Any?
+    private var globalClickMonitor: Any?
+    private var resignActiveObserver: NSObjectProtocol?
+    private var spaceChangeObserver: NSObjectProtocol?
+    private var keyMonitor: Any?
 
-    func setup(timerManager: TimerManager, jiraAPI: JiraAPI) {
+    func setup(timerManager: TimerManager, jiraAPI: JiraAPI, notificationManager: NotificationManager) {
         guard statusItem == nil else { return }
 
         self.timerManager = timerManager
         self.jiraAPI = jiraAPI
+        self.notificationManager = notificationManager
         setupMenuBar()
     }
 
@@ -27,7 +34,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
         }
 
         setupPopover()
+        setupDismissalHandling()
         observeTimerChanges()
+        observeNotificationChanges()
     }
 
     private func setupPopover() {
@@ -41,11 +50,63 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
             rootView: ContentView()
                 .environmentObject(timerManager)
                 .environmentObject(jiraAPI)
+                .environmentObject(notificationManager!)
         )
     }
 
     func popoverWillClose(_ notification: Notification) {
-        NotificationCenter.default.post(name: Notification.Name("PopoverWillClose"), object: nil)
+        // Keep the hosting controller and all SwiftUI presentation state alive.
+        // Reopening the menu-bar popover restores the exact sheet and draft that
+        // was visible before the user clicked elsewhere.
+    }
+
+    private func setupDismissalHandling() {
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.popover?.isShown == true else { return event }
+            let popoverWindow = self.popover?.contentViewController?.view.window
+            let statusWindow = self.statusItem?.button?.window
+            let isMenuWindow = event.window.map { String(describing: type(of: $0)).localizedCaseInsensitiveContains("menu") } ?? false
+            if event.window !== popoverWindow && event.window !== statusWindow && !isMenuWindow {
+                self.closePopover()
+            }
+            return event
+        }
+
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53, self?.popover?.isShown == true {
+                self?.closePopover()
+                return nil
+            }
+            return event
+        }
+    }
+
+    deinit {
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }
+        if let resignActiveObserver { NotificationCenter.default.removeObserver(resignActiveObserver) }
+        if let spaceChangeObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
     private func observeTimerChanges() {
@@ -60,6 +121,17 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private var cancellables = Set<AnyCancellable>()
+
+    private func observeNotificationChanges() {
+        guard let notificationManager else { return }
+        notificationManager.$events
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, let timerManager = self.timerManager else { return }
+                self.updateMenuBarIcon(for: timerManager.currentState)
+            }
+            .store(in: &cancellables)
+    }
 
     private func updateMenuBarIcon(for state: TimerState) {
         guard let button = statusItem?.button else { return }
@@ -83,6 +155,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
             ]
 
             button.attributedTitle = NSAttributedString(string: titleText, attributes: attributes)
+            // NSStatusBarButton defaults to a leading-image layout, which leaves
+            // room for a title even when it is empty. In the icon-only state that
+            // makes the artwork sit left of the button (and therefore left of the
+            // popover arrow, which AppKit correctly anchors to the button centre).
+            button.imagePosition = titleText.isEmpty ? .imageOnly : .imageLeading
         } else {
             // Fallback if icon file not found
             let icon: String
@@ -104,12 +181,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
             button.image = nil
             button.attributedTitle = NSAttributedString(string: icon, attributes: attributes)
+            button.imagePosition = .noImage
         }
 
         // Adjust status item length to accommodate text
         switch state {
         case .idle:
-            statusItem?.length = NSStatusItem.squareLength
+            statusItem?.length = (notificationManager?.unreadCount ?? 0) > 0 ? NSStatusItem.variableLength : NSStatusItem.squareLength
         case .running:
             if !ticketReference.isEmpty {
                 statusItem?.length = NSStatusItem.variableLength
@@ -128,11 +206,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private func getTitleText(for state: TimerState, ticketReference: String) -> String {
+        let unread = notificationManager?.unreadCount ?? 0
+        let badge = unread > 0 ? " \(min(unread, 99))" : ""
         switch state {
         case .idle:
-            return ""
+            return badge
         case .running:
-            return ticketReference.isEmpty ? "" : " \(ticketReference)"
+            return ticketReference.isEmpty ? badge : " \(ticketReference)\(badge)"
         }
     }
 
@@ -228,6 +308,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
     }
 
     private func closePopover() {
-        popover?.performClose(nil)
+        popover?.close()
     }
 }

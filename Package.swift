@@ -17,6 +17,11 @@ let package = Package(
             name: "JTimer",
             dependencies: [],
             path: "Sources/JTimer"
+        ),
+        .testTarget(
+            name: "JTimerTests",
+            dependencies: ["JTimer"],
+            path: "Tests/JTimerTests"
         )
     ]
 )
