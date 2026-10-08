@@ -12,6 +12,11 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private let defaults = UserDefaults.standard
     private let storageKey = "JTimer.notificationEvents.v1"
     private let initializedKey = "JTimer.notificationsInitialized.v1"
+    private let watermarkKey = "JTimer.notificationWatermark.v1"
+    private static let maxStoredEvents = 250
+    /// Never banner events older than this, even if they look new. Guards
+    /// against re-delivering history if persisted state is ever reset.
+    private static let maxDeliveryAge: TimeInterval = 60 * 60
     private var pollingTask: Task<Void, Never>?
     private weak var jiraAPI: JiraAPI?
     private let pollInterval: UInt64 = 5 * 60 * 1_000_000_000
@@ -44,9 +49,21 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         do {
             let issues = try await jiraAPI.fetchNotificationCandidates()
             let candidates = extractEvents(from: issues, currentUser: currentUser)
-            let knownIDs = Set(events.map(\.id))
-            let newEvents = candidates.filter { !knownIDs.contains($0.id) }
             let isFirstSync = !defaults.bool(forKey: initializedKey)
+
+            // Candidates include the FULL comment/changelog history of every
+            // issue touched in the fetch window, but the store keeps only the
+            // newest maxStoredEvents. ID-only dedup would therefore classify
+            // evicted history as "new" on every poll and re-deliver it forever.
+            // The watermark — the newest date we have ever seen — is what
+            // decides freshness; anything at or before it is old history.
+            let watermark = currentWatermark()
+            let knownIDs = Set(events.map(\.id))
+            let freshEvents = NotificationFilter.freshEvents(
+                candidates: candidates,
+                knownIDs: knownIDs,
+                watermark: watermark
+            )
 
             if isFirstSync {
                 events = candidates.map { event in
@@ -55,16 +72,20 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                     return event
                 }
                 defaults.set(true, forKey: initializedKey)
-            } else if !newEvents.isEmpty {
-                events = (newEvents + events)
+            } else if !freshEvents.isEmpty {
+                events = (freshEvents + events)
                     .sorted { $0.date > $1.date }
-                    .prefix(250)
+                    .prefix(Self.maxStoredEvents)
                     .map { $0 }
-                for event in newEvents.prefix(5) {
+                let deliverable = freshEvents.filter {
+                    $0.date > Date().addingTimeInterval(-Self.maxDeliveryAge)
+                }
+                for event in deliverable.prefix(5) {
                     await deliverNativeNotification(for: event)
                 }
             }
             save()
+            advanceWatermark(for: candidates)
         } catch {
             print("Failed to refresh notifications: \(error)")
         }
@@ -165,6 +186,23 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         [.banner, .sound]
     }
 
+    private func currentWatermark() -> Date {
+        if let stored = defaults.object(forKey: watermarkKey) as? Date { return stored }
+        // Migration for installs predating the watermark: seed it from the
+        // newest stored event so months-old history is never re-delivered.
+        let newest = events.map(\.date).max() ?? .distantPast
+        defaults.set(newest, forKey: watermarkKey)
+        return newest
+    }
+
+    private func advanceWatermark(for candidates: [JiraNotificationEvent]) {
+        guard let newest = candidates.map(\.date).max() else { return }
+        let stored = defaults.object(forKey: watermarkKey) as? Date ?? .distantPast
+        if newest > stored {
+            defaults.set(newest, forKey: watermarkKey)
+        }
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: storageKey),
               let stored = try? JSONDecoder().decode([JiraNotificationEvent].self, from: data) else { return }
@@ -174,5 +212,22 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private func save() {
         guard let data = try? JSONEncoder().encode(events) else { return }
         defaults.set(data, forKey: storageKey)
+    }
+}
+
+/// Pure freshness logic, extracted for unit testing.
+enum NotificationFilter {
+    /// Candidates that are genuinely new: strictly newer than the watermark
+    /// and not already in the store. Events at or before the watermark are
+    /// old history re-fetched with their issue and must never be delivered,
+    /// even when the maxStoredEvents cap has evicted them from the store.
+    static func freshEvents(
+        candidates: [JiraNotificationEvent],
+        knownIDs: Set<String>,
+        watermark: Date
+    ) -> [JiraNotificationEvent] {
+        candidates.filter { event in
+            event.date > watermark && !knownIDs.contains(event.id)
+        }
     }
 }

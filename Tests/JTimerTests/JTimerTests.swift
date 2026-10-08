@@ -70,3 +70,57 @@ final class TimerManagerTests: XCTestCase {
         XCTAssertEqual(TimerManager.formattedElapsedTime(since: Date().addingTimeInterval(10), now: Date()), "00:00:00")
     }
 }
+
+final class NotificationFilterTests: XCTestCase {
+    private func event(_ id: String, _ date: Date) -> JiraNotificationEvent {
+        JiraNotificationEvent(
+            id: id, issueKey: "DEV-1", issueSummary: "Summary", kind: .comment,
+            message: "hello", authorName: "Someone", date: date, isRead: false
+        )
+    }
+
+    private let watermark = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    func testCandidatesAtOrBeforeWatermarkAreNeverFresh() {
+        let old = event("old", watermark.addingTimeInterval(-3600))
+        let at = event("at", watermark)
+        let fresh = event("fresh", watermark.addingTimeInterval(60))
+
+        let result = NotificationFilter.freshEvents(
+            candidates: [old, at, fresh], knownIDs: [], watermark: watermark
+        )
+
+        XCTAssertEqual(result.map(\.id), ["fresh"])
+    }
+
+    func testKnownIDsAreExcluded() {
+        let freshUnknown = event("new-1", watermark.addingTimeInterval(60))
+        let freshKnown = event("new-2", watermark.addingTimeInterval(120))
+
+        let result = NotificationFilter.freshEvents(
+            candidates: [freshUnknown, freshKnown],
+            knownIDs: [freshKnown.id],
+            watermark: watermark
+        )
+
+        XCTAssertEqual(result.map(\.id), ["new-1"])
+    }
+
+    /// Regression: when candidates exceed the 250-event store cap, the oldest
+    /// candidates are evicted and stay unknown forever. ID-only dedup used to
+    /// re-deliver them as native notifications on every poll. The watermark
+    /// must keep classifying them as old history.
+    func testEvictedHistoryIsNotReDelivered() {
+        let candidates = (0..<300).map {
+            event("e\($0)", watermark.addingTimeInterval(TimeInterval(-$0)))
+        }
+        // Simulate the store keeping only the newest 250 events.
+        let storedIDs = Set(candidates.prefix(250).map(\.id))
+
+        let result = NotificationFilter.freshEvents(
+            candidates: candidates, knownIDs: storedIDs, watermark: watermark
+        )
+
+        XCTAssertTrue(result.isEmpty)
+    }
+}

@@ -155,6 +155,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
             ]
 
             button.attributedTitle = NSAttributedString(string: titleText, attributes: attributes)
+            // NSStatusBarButton defaults to a leading-image layout, which leaves
+            // room for a title even when it is empty. In the icon-only state that
+            // makes the artwork sit left of the button (and therefore left of the
+            // popover arrow, which AppKit correctly anchors to the button centre).
+            button.imagePosition = titleText.isEmpty ? .imageOnly : .imageLeading
         } else {
             // Fallback if icon file not found
             let icon: String
@@ -176,6 +181,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSPopoverDelegate {
 
             button.image = nil
             button.attributedTitle = NSAttributedString(string: icon, attributes: attributes)
+            button.imagePosition = .noImage
         }
 
         // Adjust status item length to accommodate text
